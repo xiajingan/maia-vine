@@ -1,0 +1,6 @@
+interface:
+  display_name: "Harness 仓库治理"
+  short_description: "执行去重且可追踪的仓库治理检查"
+  default_prompt: "使用 $harness-garden 执行计划中的仓库治理任务。"
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,32 @@
+# Sprint 11 — GitLab CI: build + promote stages (2 jobs)
+# 设计依据：sprint-11-gitlab-ci-design.md §3.1 #4, #6 / §4.3.1 / §5.4 / §6.2
+# 上游 GH 来源：.github/workflows/build-image.yml / promote.yml
+#
+# 本文件 job：
+#   - build-image（push develop / web 触发；docker save 产 dev tar；artifact 7 days）
+#   - promote-test（manual / schedule；environment.name=test；artifact 14 days）
+#
+# 共享 dind 模板由 .gitlab-ci.yml#.docker-dind 提供（image: docker:24 + services dind）
+
+build-image:
+  stage: build
+  extends: .docker-dind
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "api"'
+  variables:
+    TAG: "dev-${CI_COMMIT_SHORT_SHA}"
+  script:
+    # design §4.3.1 + Sprint 12 T-01：build_artifact.py 内置 --save-tar，省去 docker save 两次
+    - uv run --project .harness/runtime harness build-artifact --tag "dev-${CI_COMMIT_SHORT_SHA}" --save-tar --out .harness/images
+  artifacts:
+    when: on_success
+    expire_in: 7 days
+    paths:
+      - ".harness/images/*.tar"
+      # T-03 追加：build_artifact.py 输出的镜像元数据（< 1KB），便于 audit / debug
+      - "image-meta.json"
+
+# promote-test：design §6.2 设 environment.name=test
+# 触发：UI Run pipeline (web) 手填变量 / Pipeline Schedule (schedule)

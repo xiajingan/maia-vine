@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "assignment_id", "project_id", "decision", "reason"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "decision": {"enum": ["accepted", "accepted_with_changes", "deferred", "rejected"]}
+  },
+  "additionalProperties": true
+}

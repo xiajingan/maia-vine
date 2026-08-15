@@ -1,0 +1,127 @@
+version: 2
+
+project:
+  id: project-local
+  mode: standalone
+  stack: fullstack
+  deployment_owner: self
+
+agent_runtime:
+  primary: codex
+  compatibility: []
+
+walkthrough_env: development
+gates:
+  ui_design_l3: false
+  quality_threshold: 95
+  require_e2e: true
+deploy:
+  test_mode: docker
+  prod_mode: docker
+
+commands:
+  dev: []
+  lint: ["{python}", -m, ruff, check, --exclude, .harness, .]
+  format_check: ["{python}", -m, ruff, format, --check, --exclude, .harness, .]
+  typecheck: []
+  architecture: ["{harness}", python-architecture-lint]
+  unit: ["{python}", -m, pytest, -q]
+  integration: []
+  frontend_lint: [pnpm, exec, eslint, .]
+  frontend_typecheck: [pnpm, exec, tsc, --noEmit]
+  frontend_unit: []
+  e2e: [pnpm, test:e2e]
+
+command_groups:
+  static: [format_check, lint, typecheck, architecture, frontend_lint, frontend_typecheck]
+  precommit: [format_check, lint, typecheck, architecture, frontend_lint, frontend_typecheck, unit]
+
+command_conditions:
+  frontend_lint: {file_exists: package.json, package_dependencies: [eslint]}
+  frontend_typecheck: {file_exists: package.json, package_dependencies: [typescript]}
+  frontend_unit: {file_exists: package.json}
+  e2e: {file_exists: package.json, package_dependencies: ["@playwright/test"], package_scripts: [test:e2e]}
+
+python_architecture:
+  source_roots: [src]
+  layers:
+    controller: {directories: [controllers, api, routes], allow: [service, types, config, shared]}
+    service: {directories: [services], allow: [repository, types, config, shared]}
+    repository: {directories: [repositories], allow: [types, config, shared]}
+    types: {directories: [types, schemas], allow: [types, config, shared]}
+    config: {directories: [config], allow: [config, shared]}
+    shared: {directories: [shared, common, lib], allow: [shared, types, config]}
+
+automation:
+  enabled: true
+  default_mode: report-only
+  state_dir: .harness/automation
+  lock_ttl_seconds: 3600
+  max_fix_attempts: 2
+  jobs:
+    doc-garden:
+      command: ["{harness}", doc-garden, --write-report, .harness/automation/reports/doc-garden.md]
+      finding_parser: garden
+    code-garden:
+      command: ["{harness}", code-garden, --report, .harness/automation/reports/code-garden.md]
+      finding_parser: garden
+    doc-health:
+      command: ["{harness}", doc-lint, --ci]
+      finding_parser: failure
+    framework-drift:
+      command: ["{harness}", framework-drift-check]
+      finding_parser: failure
+    ci-triage:
+      command: ["{python}", -m, pytest, -q]
+      finding_parser: failure
+    nightly-tests:
+      command: ["{python}", -m, pytest, -q]
+      finding_parser: failure
+    stale-state-gc:
+      internal: gc
+
+delivery:
+  branches:
+    dev: ["^develop$", "^sprint/", "^promote/", "^feature/"]
+    test: ["^test$", "^promote/", "^release/", "^hotfix/"]
+    prod: ["^main$"]
+  refs:
+    development: develop
+    test: test
+    production: main
+
+verification:
+  runtime: local
+  api_url: http://localhost:8000
+  web_url: ""
+  health_endpoint: /health
+  ready_endpoint: /ready
+  compose_file: docker-compose.yml
+  startup_wait_seconds: 15
+  preflight_cache_ttl_seconds: 600
+  screenshot_paths: ["/"]
+  log_validate_fields: [level, time, msg]
+  env_file: .env
+  required_env_vars: []
+  db_min_tables: 0
+
+quality:
+  threshold: 95
+  dimensions:
+    static: {label: 静态检查, weight: 15}
+    unit: {label: 单元测试 + 覆盖率, weight: 20}
+    integration: {label: 集成测试, weight: 10}
+    health: {label: 服务健康, weight: 5}
+    e2e: {label: E2E 测试, weight: 15}
+    ui_parity: {label: UI 还原度, weight: 25, applies_to: [fullstack, frontend]}
+    performance: {label: 性能基线, weight: 10}
+
+worktree:
+  root: .worktrees
+  port_range: 997
+  ports: {api_base: 8000, web_base: 5173}
+  dependency_adapters:
+    - {marker: uv.lock, command: [uv, sync, --frozen]}
+    - {marker: poetry.lock, command: [poetry, install, --no-interaction]}
+    - {marker: pnpm-lock.yaml, command: [pnpm, install, --frozen-lockfile, --silent]}
+    - {marker: package-lock.json, command: [npm, ci, --silent]}

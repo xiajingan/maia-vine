@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["version", "projects"],
+  "properties": {
+    "version": {"const": 1},
+    "projects": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["repository", "owner", "project_path", "assignment_inbox", "assignment_responses", "deliveries_dir"],
+        "properties": {
+          "repository": {"type": "string", "minLength": 1},
+          "owner": {"type": "string", "minLength": 1},
+          "project_path": {"type": "string", "minLength": 1},
+          "assignment_inbox": {"type": "string", "minLength": 1},
+          "assignment_responses": {"type": "string", "minLength": 1},
+          "deliveries_dir": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"},
+          "depends_on": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "requires_contracts": {"type": "array"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

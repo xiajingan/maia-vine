@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mai.local/harness/contract.schema.json",
+  "type": "object",
+  "required": ["name", "version", "role"],
+  "properties": {
+    "name": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "role": {"enum": ["provider", "consumer"]}
+  },
+  "additionalProperties": true
+}

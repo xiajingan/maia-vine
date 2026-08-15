@@ -1,0 +1,58 @@
+name: Harness Heartbeat
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        type: choice
+        options: [doc-garden, code-garden, doc-health, framework-drift, ci-triage, nightly-tests, stale-state-gc]
+        required: true
+  schedule:
+    - cron: '17 18 * * 1-5'
+  workflow_run:
+    workflows: [Code Quality]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  heartbeat:
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.job)) || fromJSON('["doc-garden","code-garden","doc-health","nightly-tests","stale-state-gc"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: ./.github/actions/setup-harness-runtime
+      - run: uv run --project .harness/runtime harness heartbeat run '${{ matrix.job }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: heartbeat-${{ matrix.job }}
+          path: .harness/automation
+          if-no-files-found: ignore
+
+  ci-triage:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: ./.github/actions/setup-harness-runtime
+      - run: uv run --project .harness/runtime harness heartbeat run ci-triage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: heartbeat-ci-triage
+          path: .harness/automation
+          if-no-files-found: ignore

@@ -1,0 +1,55 @@
+version: 1
+baseline_id: dual-deploy-v1
+promote_strategy: manual
+train_schedule: 0 17 * * 1-5
+build:
+  image_repo: harness-example
+  default_platform: linux/amd64
+  artifact_dir: .harness/images
+  targets:
+    app:
+      type: docker
+      dockerfile: Dockerfile
+      context: .
+      platforms:
+      - linux/amd64
+      profiles:
+      - release
+      delivery: artifact
+environments:
+  test:
+    enabled: false
+    deploy_mode: docker
+    strategy: serial
+    remote_workdir: /opt/app/test
+    compose_file: deploy/test/docker-compose.yml
+    remote_compose_file: deploy/test/docker-compose.yml
+    remote_runtime_env_file: deploy/test/runtime.env
+    health_url: https://test.example.com/health
+    smoke_cmd: ''
+    extra_required_secrets: []
+  prod:
+    enabled: false
+    deploy_mode: cloud-native
+    strategy: rolling
+    cluster_identity: example-prod-cluster
+    namespace: example-app
+    credential_refs:
+    - PROD_KUBECONFIG
+    helm_releases:
+    - name: app
+      chart: deploy/helm/app
+      version: 0.1.0
+      values_files:
+      - deploy/helm/values-prod.yml
+      image_targets:
+      - app
+    health_url: https://app.example.com/health
+    smoke_cmd: ''
+    extra_required_secrets: []
+    health_window_minutes: 30
+    rollback_strategy: helm-rollback
+    rollback_thresholds:
+      error_rate_5xx: 0.01
+      p95_latency_ms: 500
+      cpu_saturation: 0.85

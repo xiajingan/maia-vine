@@ -1,0 +1,28 @@
+# Composite action: 安装默认 fullstack（Python 3.12 + TypeScript）规范运行时。
+
+name: 安装 Harness Runtime
+description: 安装锁定版本的 Python 3.12 与 TypeScript 工程依赖
+
+runs:
+  using: composite
+  steps:
+    - name: 安装 uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: true
+    - name: 安装 Harness 依赖
+      shell: bash
+      run: uv sync --project .harness/runtime --frozen --python 3.12
+    - name: 安装 pnpm
+      if: hashFiles('pnpm-lock.yaml', 'package.json') != ''
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10.31.0
+    - name: 安装 TypeScript 依赖
+      shell: bash
+      run: |
+        if [[ -f pnpm-lock.yaml ]]; then
+          pnpm install --frozen-lockfile
+        elif [[ -f package.json ]]; then
+          pnpm install
+        fi

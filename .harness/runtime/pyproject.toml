@@ -1,0 +1,20 @@
+[project]
+name = "mai-harness-runtime"
+version = "0.2.0"
+requires-python = ">=3.12"
+dependencies = ["playwright>=1.54,<2", "PyYAML>=6.0.2,<7", "ruff>=0.12,<1", "pytest>=8.3,<9"]
+
+[project.scripts]
+harness = "mai_harness.runtime.commands.harness_cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mai_harness"]
+
+[[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

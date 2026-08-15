@@ -1,0 +1,57 @@
+version: 2
+project:
+  id: maia-vine
+  mode: managed
+  stack: frontend
+  deployment_owner: control
+agent_runtime:
+  primary: codex
+  compatibility:
+  - agy
+  - copilot
+ai_platform:
+- codex
+- agy
+- copilot
+automation:
+  enabled: true
+  default_mode: report-only
+  state_dir: .harness/automation
+  lock_ttl_seconds: 3600
+  max_fix_attempts: 2
+  autonomy:
+    enabled: false
+    mode: report-only
+    allowed_jobs:
+    - doc-garden
+    allowed_severities:
+    - low
+    protected_paths:
+    - src/auth
+    - migrations
+    - config/deploy.yml
+    - .github
+    - .gitlab
+    fix_commands: {}
+walkthrough_env: development
+gates:
+  ui_design_l3: false
+  quality_threshold: 95
+  require_e2e: true
+deploy:
+  test_mode: docker
+  prod_mode: docker
+commands:
+  lint: []
+  format_check: []
+  typecheck: []
+  architecture: []
+  unit: []
+  integration: []
+management:
+  control_id: maia
+  control_path: ..
+  intake_policy: manual-planning
+  assignment_inbox: docs/assignments/inbox
+  assignment_responses: docs/assignments/responses
+  deliveries_dir: docs/deliveries

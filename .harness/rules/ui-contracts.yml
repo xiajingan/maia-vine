@@ -1,0 +1,24 @@
+# Project-owned UI parity contracts consumed by the Harness Python audit tools.
+# Set required: false with a non-empty reason for projects without a UI.
+required: true
+reason: "Replace this example with the current Sprint contract"
+contracts:
+  - name: ExamplePage
+    sprints: [sprint-0-example]
+    design_ref: 示例页面 / 默认状态
+    prototype:
+      path: docs/design-docs/prototypes/sprint-0-example/example.html
+      ready_selector: .page
+    live:
+      path: /example
+      ready_selector: .example-page
+    screenshot_name: example-default.png
+    viewport: {width: 1440, height: 900}
+    checks:
+      - {kind: presence, label: 页头, prototype: .page .header, live: .example-page .header}
+      - {kind: count, label: 卡片数量, prototype: .page .card, live: .example-page .card}
+      - {kind: textList, label: 卡片标题顺序, prototype: .page .card h3, live: .example-page .card__title}
+      - {kind: style, label: 卡片背景, prototype: .page .card, live: .example-page .card, property: backgroundColor}
+      - {kind: style, label: 标题字号, prototype: .page .header h1, live: .example-page .header h1, property: fontSize}
+      - {kind: metric, label: 卡片圆角, prototype: .page .card, live: .example-page .card, property: borderTopLeftRadius}
+mock_matrix: []

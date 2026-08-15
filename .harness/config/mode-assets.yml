@@ -1,0 +1,8 @@
+version: 1
+modes:
+  standalone:
+    capabilities: [sprint, component-quality, build, local-deploy, system-e2e]
+  managed:
+    capabilities: [sprint, component-quality, build, assignment, delivery]
+  control:
+    capabilities: [coordination, release-compose, shared-deploy, system-e2e, client-package]

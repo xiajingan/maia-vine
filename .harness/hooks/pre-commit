@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# ⚠️ MAI-Harness 框架文件 — 请勿在项目中修改。如需变更请在框架工程中修改并覆盖到此项目中。
+# =============================================================================
+# Harness Engineering — Git Pre-commit Hook
+#
+# PROJECT_RULES.md Pre-commit Checklist 代码化执行。
+# 安装方式: cp pre-commit.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+# 检查项由 config/harness.yml.command_groups.precommit 声明。
+# =============================================================================
+
+set -euo pipefail
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
+
+pass() { printf "${GREEN}✅${NC} %s\n" "$*"; }
+fail() { printf "${RED}❌${NC} %s\n" "$*"; ERRORS=$((ERRORS+1)); }
+warn() { printf "${YELLOW}⚠️${NC}  %s\n" "$*"; }
+
+ERRORS=0
+
+echo "🔒 Harness Pre-commit Gate"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ─── 1-3. 项目命令 ───────────────────────────────────────────────────────────
+if uv run --project .harness/runtime harness run-project-command --group precommit --required; then
+  pass "precommit 命令组"
+else
+  fail "precommit 命令组失败"
+fi
+
+# ─── 4. 密钥扫描 ──────────────────────────────────────────────────────────────
+# Python 与非代码文件统一由 Harness secret scanner 检查。
+
+if uv run --project .harness/runtime harness secrets-scan scan --staged; then
+  pass "密钥扫描"
+else
+  fail "密钥扫描失败"
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# ─── 结果 ────────────────────────────────────────────────────────────────────
+
+if [[ $ERRORS -gt 0 ]]; then
+  printf "\n${RED}Pre-commit 检查失败 (%d 个错误)${NC}\n" "$ERRORS"
+  printf "使用 ${YELLOW}git commit --no-verify${NC} 可跳过（仅紧急情况）\n\n"
+  exit 1
+else
+  printf "\n${GREEN}Pre-commit 检查通过${NC}\n\n"
+  exit 0
+fi

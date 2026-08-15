@@ -1,0 +1,73 @@
+version: 1
+
+# Source paths belong to the Harness repository. Targets describe the installed
+# project layout. Bootstrap and architecture tests consume this namespace and
+# legacy-migration mapping; concrete asset selection lives in scaffold-assets.yml.
+managed:
+  runtime: .harness/runtime
+  config: .harness/config
+  schemas: .harness/schemas
+  rules: .harness/rules
+  eslint: .harness/eslint
+  templates: .harness/templates
+  install_manifest: .harness/install-manifest.yml
+
+generated:
+  test_cases: docs/test-cases
+  e2e: tests/e2e
+
+fixed:
+  codex: .codex
+  agents: .agents
+  github: .github
+  gitlab: .gitlab
+
+legacy_managed:
+  - docs/SPRINT.md
+  - docs/PRODUCT_SENSE.md
+  - docs/DESIGN.md
+  - docs/UI_DESIGN_SYSTEM.md
+  - docs/CODING_BACKEND.md
+  - docs/CODING_FRONTEND.md
+  - docs/TECH_BACKEND.md
+  - docs/TECH_FRONTEND.md
+  - docs/CODE_REVIEW.md
+  - docs/OBSERVABILITY.md
+  - docs/QUALITY_SCORE.md
+  - docs/PRODUCT_ACCEPTANCE.md
+  - docs/RELEASE.md
+  - docs/GOLDEN_RULES.md
+  - docs/TEST_CASES.md
+  - docs/CICD.md
+  - docs/MIGRATION.md
+  - docs/SECRETS.md
+  - lint/eslint.config.mjs
+  - lint/harness-plugin.mjs
+  - lint/task-rules.yml
+  - lint/walkthrough-checks.yml
+  - lint/ui-contracts.yml
+  - templates/release-notes.md
+  - templates/migration/manifest.yml.tpl
+  - templates/migration/up.sql.tpl
+  - templates/migration/down.sql.tpl
+  - templates/migration/README.md
+  - templates/observability/README.md
+  - templates/observability/promql/error-rate.promql
+  - templates/observability/promql/p95-latency.promql
+  - templates/observability/promql/saturation.promql
+  - templates/observability/promql/slo-burn.promql
+  - templates/observability/logql/errors-by-service.logql
+  - templates/observability/logql/no-secret-leak.logql
+  - templates/observability/logql/trace.logql
+  - templates/ui/tokens.css
+  - templates/ui/prototype-base.html
+  - pyproject.toml
+  - uv.lock
+  - .python-version
+  - verify.config.sh
+  - pre-commit.sh
+  - playwright.config.ts
+  - test-cases/index.md
+  - e2e/helpers/playwright-runtime.ts
+  - e2e/helpers/auth.ts
+  - e2e/scenarios/auth-flow.spec.ts

@@ -1,0 +1,74 @@
+version: 1
+
+runtime:
+  required_assets:
+    - config/harness.yml
+    - .harness/install-manifest.yml
+    - .harness/runtime/src/mai_harness/runtime/commands/harness_cli.py
+    - .harness/rules/task-rules.yml
+  specification_files:
+    - SPRINT.md
+    - PRODUCT_SENSE.md
+    - DESIGN.md
+    - UI_DESIGN_SYSTEM.md
+    - CODING_BACKEND.md
+    - CODING_FRONTEND.md
+    - TECH_BACKEND.md
+    - TECH_FRONTEND.md
+    - CODE_REVIEW.md
+    - OBSERVABILITY.md
+    - QUALITY_SCORE.md
+    - PRODUCT_ACCEPTANCE.md
+    - RELEASE.md
+    - GOLDEN_RULES.md
+    - TEST_CASES.md
+    - CICD.md
+    - MIGRATION.md
+    - SECRETS.md
+  framework_files:
+    - .harness/.gitignore
+    - .harness/README.md
+    - .harness/secrets/.gitignore
+    - .harness/secrets/README.md
+    - .harness/state/.gitignore
+    - .harness/state/README.md
+
+project_templates:
+  templates/AGENTS.md: AGENTS.md
+  templates/ARCHITECTURE.md: ARCHITECTURE.md
+  templates/PROJECT_RULES.md: PROJECT_RULES.md
+  templates/USER_STORIES.md: USER_STORIES.md
+  templates/eslint.config.mjs: eslint.config.mjs
+  templates/verify.config.sh: config/verify.config.sh
+  templates/playwright.config.ts: playwright.config.ts
+  templates/e2e/helpers/auth.ts: tests/e2e/helpers/auth.ts
+  templates/e2e/scenarios/auth-flow.spec.ts: tests/e2e/scenarios/auth-flow.spec.ts
+
+generated_indexes:
+  templates/product-specs-index.md: docs/product-specs/index.md
+  templates/design-docs-index.md: docs/design-docs/index.md
+  templates/tech-docs-index.md: docs/tech-docs/index.md
+  templates/review-reports-index.md: docs/review-reports/index.md
+  templates/test-reports-index.md: docs/test-reports/index.md
+  templates/acceptance-reports-index.md: docs/acceptance-reports/index.md
+  templates/observability-reports-index.md: docs/observability-reports/index.md
+  templates/bugs-index.md: docs/bugs/index.md
+  templates/tech-debt-tracker.md: docs/exec-plans/tech-debt-tracker.md
+  templates/test-cases-index.md: docs/test-cases/index.md
+  templates/ui-contracts.yml: .harness/rules/ui-contracts.yml
+
+workflows:
+  standalone: [quality.yml, staging.yml, production.yml, docs.yml, build-image.yml, promote.yml, release.yml, hotfix.yml, back-merge.yml, main-gate.yml, heartbeat.yml, pr-lint.yml]
+  managed: [quality.yml, build-image.yml, docs.yml, main-gate.yml, heartbeat.yml, pr-lint.yml]
+  control: [quality.yml, back-merge.yml, docs.yml, main-gate.yml, heartbeat.yml, pr-lint.yml]
+
+directories:
+  common: [docs/exec-plans/active, docs/exec-plans/completed, .harness/automation/runs, .harness/pipeline/runs]
+  standalone: []
+  managed: [docs/assignments/inbox, docs/assignments/responses, docs/deliveries]
+  control: []
+
+platform_required:
+  codex: [.codex/agents/harness-plan.toml, .codex/skills/harness-task/SKILL.md]
+  agy: [.agents/plugins/harness-plugin/plugin.json]
+  copilot: [.github/agents/harness-plan.agent.md, .github/copilot-instructions.md]

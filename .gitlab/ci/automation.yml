@@ -1,0 +1,15 @@
+harness-heartbeat:
+  extends: .node-pnpm
+  stage: quality
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $HARNESS_HEARTBEAT_JOB'
+  parallel:
+    matrix:
+      - HEARTBEAT_JOB: [doc-garden, code-garden, doc-health, nightly-tests, stale-state-gc]
+  script:
+    - uv run --project .harness/runtime harness heartbeat run "${HARNESS_HEARTBEAT_JOB:-$HEARTBEAT_JOB}"
+  artifacts:
+    when: always
+    paths: [.harness/automation/]
+    expire_in: 14 days

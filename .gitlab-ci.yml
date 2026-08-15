@@ -1,0 +1,120 @@
+# Sprint 11 — GitLab CI/CD 顶层入口
+# 设计依据：docs/tech-docs/sprint-11-gitlab-ci-design.md
+# 实施依据：docs/exec-plans/active/sprint-11-t02-plan.md
+#
+# 本文件承载：
+#   - stages 顺序（design §2.1，7 个）
+#   - 全局 variables（NODE/PNPM 版本 + dind 关键变量）
+#   - default.image / default.cache（pnpm store 跨 ref 复用）
+#   - workflow.rules（design §3.5，5 条 R1–R5；R2 必须早于 R3）
+#   - include（5 个 local 子模板，按 stage 拆分）
+#   - 3 个 hidden anchors（.node-pnpm / .docker-dind / .ssh-prepare），由子模板 extends 复用
+#
+# 21 个 job 分布：lint(3) + quality(3) + build(2) + deploy(6) + release(7) = 21
+# 6 项 status check（与 .gitlab/protected-branches.yml 字符串精确匹配）：
+#   l1-quality / l2-quality / integration / main-source-gate / regression / approve
+
+stages:
+  - lint
+  - quality
+  - security
+  - build
+  - promote
+  - staging
+  - release
+  - production
+
+variables:
+  NODE_VERSION: "20"
+  PNPM_VERSION: "10.31.0"
+  # Sprint 12 T-04：删除顶层 delivery-mode 显式 export（旧名见 docs/CICD.md
+  # "Variable rename schedule" 节）。项目脚本 scripts/deploy.py /
+  # image_promote.py 默认值已改 'artifact'，与 T-05 框架 patch 0012/0015
+  # 行为对齐；如需切回 registry 模式，在 job variables 中显式声明
+  # HARNESS_DELIVERY_MODE: "registry"。
+  # design §5.4：dind 关闭 TLS，走 HTTP 2375
+  DOCKER_HOST: "tcp://docker:2375"
+  DOCKER_TLS_CERTDIR: ""
+
+default:
+  image: node:20-alpine
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - .pnpm-store
+
+# ─── workflow:rules（design §3.5，顺序敏感 R1→R5）────────────────────────────
+# R1 优先：所有 MR 必须能跑 pipeline 才能验证 status check
+# R2 必须早于 R3：防止 push 与 open MR 双跑
+# R5 兜底 never：个人 wip 分支 push 不创建 pipeline
+workflow:
+  rules:
+    # R1：MR 事件 → 创建 pipeline（默认 on_success）
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    # R2：push 且当前分支已有 open MR → 不创建（去重）
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS != null'
+      when: never
+    # R3：push 主干分支 → 创建（develop / test / main / release/* / hotfix/*）
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^(develop|test|main|release\/.*|hotfix\/.*)$/'
+    # R4：手动 / 调度 / API / trigger → 创建（promote-test / release-* / prod-* manual jobs）
+    - if: '$CI_PIPELINE_SOURCE =~ /^(web|schedule|api|trigger)$/'
+    # R5：兜底 never（个人 sprint-x wip 分支 push 不开 pipeline，等开 MR 走 R1）
+    - when: never
+
+include:
+  - local: '.gitlab/ci/lint.yml'
+  - local: '.gitlab/ci/quality.yml'
+  - local: '.gitlab/ci/security.yml'
+  - local: '.gitlab/ci/build.yml'
+  - local: '.gitlab/ci/automation.yml'
+
+# ─── 顶层 hidden anchors（hidden jobs，以 . 起首；由子模板 extends 复用）──────
+# 默认 fullstack 基线：Python 3.12 规范运行时 + 项目存在 package.json 时的 TS 依赖。
+.python-harness:
+  image: ghcr.io/astral-sh/uv:python3.12-alpine
+  before_script:
+    - apk add --no-cache git bash
+    - if [ -f package.json ]; then apk add --no-cache nodejs npm && npm install -g "pnpm@${PNPM_VERSION}"; fi
+    - uv sync --project .harness/runtime --frozen
+    - if [ -f package.json ] && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f package.json ]; then pnpm install; fi
+  cache:
+    key: "uv-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .uv-cache
+
+# .node-pnpm：node 镜像 + pnpm 安装基线（design §5.4 cache 行为对齐）
+.node-pnpm:
+  extends: .python-harness
+
+# .docker-dind：dind 模板（design §5.4 全字段对齐）
+.docker-dind:
+  image: ghcr.io/astral-sh/uv:0.10.9-python3.12-alpine
+  services:
+    - name: docker:24-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache docker-cli git bash
+    - if [ -f package.json ]; then apk add --no-cache nodejs npm && npm install -g "pnpm@${PNPM_VERSION}" && pnpm config set store-dir .pnpm-store; fi
+    - uv sync --project .harness/runtime --frozen
+    - if [ -f package.json ] && [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f package.json ]; then pnpm install; fi
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - .pnpm-store
+
+# .ssh-prepare：SSH File 类型变量消费基线（design §6.3）— 语义占位
+#
+# 为何保留为 placeholder（不 extends 也不删）：
+#   1. design §6.3 文档锚点指向本 hidden job，删除会破坏文档引用；
+#   2. GitLab File 类型 CI/CD Variable 在 job runtime 已落盘成临时路径，
+#      无法在共享 before_script 中静态 chmod（路径名因 job 而异）；
+#   3. 真实 chmod 600 由各 deploy/regression job 在自身 script 显式执行：
+#
+# 因此本 anchor 不被任何 job extends，仅作为 design 文档可定位的语义锚。
+# 若 GitLab 新增能力允许跨 job 的 SSH 准备模板，则在此扩展。
+.ssh-prepare:
+  before_script:
+    - 'echo "placeholder: real chmod 600 of TEST_SSH_PRIVATE_KEY / PROD_SSH_PRIVATE_KEY runs in each deploy job script (see deploy.yml / release.yml)"'

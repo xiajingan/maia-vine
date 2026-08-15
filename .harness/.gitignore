@@ -1,0 +1,8 @@
+# 中间过程数据：除 state/ 索引外不入库
+images/
+reports/
+runtime/.venv/
+**/__pycache__/
+**/*.pyc
+*.tmp
+*.log
