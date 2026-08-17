@@ -8,7 +8,7 @@ Vine 加载 Stem 签发、Celt 转交的 Todo 人机步骤，呈现表单、预�
 
 ## 2. 结构与契约
 
-`transport` 负责 Bridge 握手/消息；`runtime` 负责上下文、协议和恢复；`features` 只负责有类型的人机 Step renderer；`components` 只含 UI；`telemetry` 产生脱敏行为事件。上下文固定 `tenant/task/todo/execution/attempt/fencing/terminal/action/workflow` 版本、目标/参数摘要、幂等键、允许能力、Vine digest、协议版本、过期时间和 Stem 签名。
+`transport` 负责消费 Celt 发布的 Bridge 握手/消息 Schema；`runtime` 负责上下文、协议兼容和恢复；`features` 只负责有类型的人机 Step renderer；`components` 只含 UI；`telemetry` 产生脱敏行为事件。Vine 不拥有 Bridge wire contract，也不手写协议 DTO。上下文固定 `tenant/task/todo/execution/attempt/fencing/terminal/action/workflow` 版本、目标/参数摘要、幂等键、允许能力、Vine digest、协议版本、过期时间和 Stem 签名。
 
 每个 HumanStepDescriptor 包含全局 `step_code`、renderer version、input/output JSON Schema、字段约束与脱敏级别、只读影响摘要、风险提示、允许 command（edit/accept/reject/ack/cancel）和本地校验规则。Vine 只能加载自身 manifest 登记且与协议兼容的 renderer；未知 step_code 或 Schema 拒绝执行，不以动态 HTML/脚本扩展。
 
@@ -16,7 +16,7 @@ Bridge 启动挑战生成页面实例 nonce，并绑定 Celt 进程、来源窗�
 
 Vine 操作前必须建立短期 InteractionSession：当前操作者经 OIDC/device authorization 登录后，由平台签名绑定 tenant/user/account/terminal/Todo/attempt；Celt 同时核对当前业务账号。共享 CVD 的身份/账号不匹配、会话过期或页面遗留时清空内容并重新认证，回执携带实际 interaction principal。
 
-每个回执包含 Task/Todo/Execution/attempt、Action/Workflow 版本、step ID、attempt 内 sequence、幂等键、起止时间、输入摘要、结构化 output、Seed error envelope 和 evidence refs。Vine 只报告用户交互结果；Celt/Stem 转换为权威 Step/Execution 状态。
+每个回执严格按 Celt Bridge Schema 包含 Task/Todo/Execution/attempt、Action/Workflow 版本、step ID、attempt 内 sequence、幂等键、起止时间、输入摘要、结构化 output、error envelope 和 evidence refs。Vine 只报告用户交互结果；Celt/Stem 转换为权威 Step/Execution 状态。
 
 平台高风险 Confirmation 必须在 Stem 入队前完成，Vine 不授予权限。Vine 的 `ack` 只是已授权 Todo 在终端侧的即时安全确认，不能改变目标/参数/版本，不能替代或创建 Confirmation。取消/暂停/租约撤销由 Celt 推送并要求 ACK：未调用 Bridge 的步骤立即停止；进行中的可取消 Operation 在安全点停止；已产生但结果未知的副作用上报 uncertain，由 Stem 裁决，页面不得自行重试。草稿加密并绑定 tenant/user/account/Todo/attempt/Schema/Vine digest；成功、取消、撤销、过期、登出或身份切换时清除。
 
