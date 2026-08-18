@@ -241,9 +241,7 @@ def validate_failed_action_evidence(
         return [f"上游失败 Action context 格式非法: {task_id} ({task_type})"]
     expected_context = _context(root, sprint_path, rules_path, task_id, task_type, task)
     context_fields = ("task_id", "task_type", "task_sha256", "rules_sha256", "git_sha", "sprint_structure_sha256")
-    if (
-        any(context.get(field) != expected_context.get(field) for field in context_fields)
-    ):
+    if any(context.get(field) != expected_context.get(field) for field in context_fields):
         return [f"上游失败 Action 证据不存在: {task_id} ({task_type})"]
     phases = state.get("phases") or {}
     phase = (phases.get("execute") or {}) if isinstance(phases, dict) else {}

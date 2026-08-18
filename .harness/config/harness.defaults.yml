@@ -10,6 +10,9 @@ agent_runtime:
   primary: codex
   compatibility: []
 
+task_execution:
+  max_review_retries: 9
+
 walkthrough_env: development
 gates:
   ui_design_l3: false

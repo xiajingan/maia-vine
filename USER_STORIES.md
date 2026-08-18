@@ -2,6 +2,8 @@
 
 > 演进顺序：V0 Bridge → V1 通用 renderer → V2 Reply → V3 Broadcast/Group → V4 弱网/可访问性。Vine 只负责人机 Step，不定义 Workflow 或授权。
 
+Vine 不消费 Seed，也不产生 Seed Dependency Assignment；跨工程输入只面向实际拥有 Bridge、OpenAPI 或业务契约的工程。
+
 | ID | 用户故事 | 验收标准 | 来源 | 状态 |
 |---|---|---|---|---|
 | VINE-001 | 作为终端用户，我希望安全加载 Todo 工作流。 | 验证签名/租约/版本；仅显示允许步骤；无效上下文阻止执行。 | CEL-005 | `draft` |

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from mai_harness.runtime.application.collaboration import dispatch_assignment, target_assignment_service
 from mai_harness.runtime.domain.dependency_graph import dependency_order
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.core.paths import resolve_managed_project, resolve_project_relative
@@ -13,7 +14,6 @@ from mai_harness.runtime.infrastructure.manifest import (
     digest,
     load_manifest,
     now,
-    validate_assignment,
     validate_delivery,
     validate_release,
     write_manifest,
@@ -49,52 +49,55 @@ def load_managed_projects(path: Path) -> dict[str, dict[str, Any]]:
 
 
 class ControlAssignmentService:
-    def __init__(self, state_root: Path, projects: dict[str, dict[str, Any]]) -> None:
+    def __init__(self, state_root: Path, projects: dict[str, dict[str, Any]], source_project_id: str = "") -> None:
         self.root = state_root / "assignments"
         self.projects = projects
+        self.source_project_id = source_project_id
 
     def dispatch(self, assignment: dict[str, Any], control_root: Path) -> dict[str, Any]:
-        errors = validate_assignment(assignment)
         project_id = assignment.get("target_project_id")
         if project_id not in self.projects:
-            errors.append(f"target_project_id: 未登记工程 {project_id}")
-        if errors:
-            raise ValueError("Assignment 分发校验失败:\n- " + "\n- ".join(errors))
-        key = assignment["idempotency_key"]
-        receipt = self.root / "idempotency" / f"{key}.json"
+            raise ValueError(f"Assignment 分发校验失败:\n- target_project_id: 未登记工程 {project_id}")
         project = self.projects[project_id]
         managed_root = resolve_managed_project(
             control_root, project["project_path"], f"projects.{project_id}.project_path"
         )
-        inbox = resolve_project_relative(
+        registered_inbox = resolve_project_relative(
             managed_root, project["assignment_inbox"], f"projects.{project_id}.assignment_inbox"
         )
-        target = inbox / f"{assignment['assignment_id']}.json"
-        assignment_digest = digest(assignment)
-        document = {**assignment, "dispatched_at": now(), "manifest_digest": assignment_digest}
-        if receipt.exists():
-            recorded = load_manifest(receipt)
-            if (
-                recorded.get("assignment_id") != assignment["assignment_id"]
-                or recorded.get("manifest_digest") != assignment_digest
-            ):
-                raise ValueError(f"idempotency_key 冲突: {key}")
-            if target.exists():
-                existing = load_manifest(target)
-                if existing.get("manifest_digest") != assignment_digest:
-                    raise ValueError(f"Assignment 目标文件摘要冲突: {target}")
-                return {"duplicate": True, "restored": False, "receipt": receipt, "target": target}
-            write_manifest(target, document)
-            return {"duplicate": True, "restored": True, "receipt": receipt, "target": target}
-        write_manifest(target, document)
-        write_manifest(
-            receipt,
-            {"assignment_id": assignment["assignment_id"], "manifest_digest": assignment_digest, "target": str(target)},
-        )
-        return {"duplicate": False, "restored": False, "receipt": receipt, "target": target}
+        target_service = target_assignment_service(managed_root)
+        if target_service.inbox != registered_inbox:
+            raise ValueError(f"Managed Assignment inbox 与 Control 登记不一致: {project_id}")
+        target = registered_inbox / f"{assignment['assignment_id']}.json"
+        receipt = managed_root / ".harness/state/assignments/idempotency" / f"{assignment['idempotency_key']}.json"
+        target_existed = target.exists()
+        receipt_existed = receipt.exists()
+        dispatched = dispatch_assignment(self.source_project_id, managed_root, assignment)
+        return {
+            "duplicate": receipt_existed,
+            "restored": receipt_existed and not target_existed,
+            "receipt": receipt,
+            "target": dispatched,
+        }
 
     def status(self, control_root: Path) -> list[dict[str, Any]]:
         statuses = []
+        global_delivery_ids: dict[str, list[tuple[str, Path]]] = {}
+        for project_id, project in sorted(self.projects.items()):
+            managed_root = resolve_managed_project(
+                control_root, project["project_path"], f"projects.{project_id}.project_path"
+            )
+            deliveries_dir = resolve_project_relative(
+                managed_root, project["deliveries_dir"], f"projects.{project_id}.deliveries_dir"
+            )
+            for path in sorted(deliveries_dir.glob("*.json")) if deliveries_dir.exists() else []:
+                try:
+                    item = load_manifest(path)
+                except (OSError, ValueError):
+                    continue
+                delivery_id = str(item.get("delivery_id", ""))
+                if delivery_id:
+                    global_delivery_ids.setdefault(delivery_id, []).append((project_id, path))
         for project_id, project in sorted(self.projects.items()):
             managed_root = resolve_managed_project(
                 control_root, project["project_path"], f"projects.{project_id}.project_path"
@@ -107,25 +110,119 @@ class ControlAssignmentService:
             )
             deliveries = sorted(path.name for path in deliveries_dir.glob("*.json")) if deliveries_dir.exists() else []
             responses = sorted(path.name for path in responses_dir.glob("*.json")) if responses_dir.exists() else []
-            statuses.append({"project_id": project_id, "responses": responses, "deliveries": deliveries})
+            assignments = target_assignment_service(managed_root).pending()
+            known_assignments = {item["assignment_id"] for item in assignments}
+            project_errors: list[str] = []
+            invalid_documents: list[dict[str, Any]] = []
+            for kind, directory in (("Response", responses_dir), ("Delivery", deliveries_dir)):
+                for path in sorted(directory.glob("*.json")) if directory.exists() else []:
+                    try:
+                        item = load_manifest(path)
+                    except (OSError, ValueError) as exc:
+                        message = f"{kind} JSON 无法解析: {exc}"
+                        project_errors.append(f"{path}: {message}")
+                        invalid_documents.append({"path": str(path), "errors": [message]})
+                        continue
+                    assignment_id = item.get("assignment_id")
+                    document_errors = []
+                    if assignment_id not in known_assignments:
+                        document_errors.append(f"{kind} 引用了不存在的 Assignment: {assignment_id}")
+                    expected_name = (
+                        f"{assignment_id}.json" if kind == "Response" else f"{item.get('delivery_id', '')}.json"
+                    )
+                    if path.name != expected_name:
+                        document_errors.append(f"{kind} 文件名必须是 {expected_name}")
+                    if kind == "Delivery" and len(global_delivery_ids.get(str(item.get("delivery_id", "")), [])) != 1:
+                        document_errors.append(f"delivery_id 在全部 Managed 工程中不唯一: {item.get('delivery_id')}")
+                    if document_errors:
+                        project_errors.extend(f"{path}: {error}" for error in document_errors)
+                        invalid_documents.append({"path": str(path), kind.lower(): item, "errors": document_errors})
+            for assignment in assignments:
+                if assignment["status"] == "invalid":
+                    project_errors.extend(assignment["errors"])
+                    invalid_documents.extend(assignment["invalid_documents"])
+            statuses.append(
+                {
+                    "project_id": project_id,
+                    "assignments": assignments,
+                    "invalid": bool(project_errors),
+                    "errors": project_errors,
+                    "invalid_documents": invalid_documents,
+                    "responses": responses,
+                    "deliveries": deliveries,
+                }
+            )
         return statuses
 
 
 def assert_registered_delivery_paths(
     delivery_paths: list[Path], projects: dict[str, dict[str, Any]], control_root: Path
 ) -> None:
-    allowed_roots = [
-        resolve_project_relative(
-            resolve_managed_project(control_root, project["project_path"], f"projects.{project_id}.project_path"),
-            project["deliveries_dir"],
-            f"projects.{project_id}.deliveries_dir",
-        )
-        for project_id, project in projects.items()
-    ]
     for path in delivery_paths:
         resolved = path.resolve()
-        if not any(resolved.parent == root for root in allowed_roots):
+        owner = next(
+            (
+                project_id
+                for project_id, project in projects.items()
+                if resolved.parent
+                == resolve_project_relative(
+                    resolve_managed_project(
+                        control_root, project["project_path"], f"projects.{project_id}.project_path"
+                    ),
+                    project["deliveries_dir"],
+                    f"projects.{project_id}.deliveries_dir",
+                )
+            ),
+            None,
+        )
+        if owner is None:
             raise ValueError(f"Delivery 不在已登记 Managed 发布产出目录: {path}")
+        if load_manifest(resolved).get("project_id") != owner:
+            raise ValueError(f"Delivery 工程身份与所在目录不一致: {path}（目录所有者 {owner}）")
+
+
+def assert_registered_delivery_states(
+    delivery_paths: list[Path], projects: dict[str, dict[str, Any]], control_root: Path
+) -> None:
+    """Require each Delivery to be accepted and verified by its owning Managed project."""
+    for path in delivery_paths:
+        resolved = path.resolve()
+        delivery = load_manifest(resolved)
+        project_id = delivery.get("project_id")
+        project = projects.get(project_id)
+        if not project:
+            raise ValueError(f"Delivery 声明了未登记工程: {project_id}")
+        managed_root = resolve_managed_project(
+            control_root, project["project_path"], f"projects.{project_id}.project_path"
+        )
+        service = target_assignment_service(managed_root)
+        status = service.status(delivery.get("assignment_id", ""))
+        valid_paths = {Path(item["path"]).resolve() for item in status.get("deliveries", [])}
+        if status.get("state") != "delivered" or resolved not in valid_paths:
+            raise ValueError(f"Delivery 未通过所属 Managed 的 Assignment/Response/供应链完整门禁: {path}")
+
+
+def assert_global_delivery_ids(projects: dict[str, dict[str, Any]], control_root: Path) -> None:
+    indexed: dict[str, list[Path]] = {}
+    for project_id, project in projects.items():
+        managed_root = resolve_managed_project(
+            control_root, project["project_path"], f"projects.{project_id}.project_path"
+        )
+        deliveries_dir = resolve_project_relative(
+            managed_root, project["deliveries_dir"], f"projects.{project_id}.deliveries_dir"
+        )
+        for path in sorted(deliveries_dir.glob("*.json")) if deliveries_dir.exists() else []:
+            try:
+                delivery = load_manifest(path)
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"Delivery JSON 无法解析: {path}: {exc}") from exc
+            delivery_id = str(delivery.get("delivery_id", ""))
+            if not delivery_id:
+                raise ValueError(f"Delivery 缺少 delivery_id: {path}")
+            indexed.setdefault(delivery_id, []).append(path)
+    if duplicates := {key: paths for key, paths in indexed.items() if len(paths) != 1}:
+        details = "; ".join(f"{key}={[str(path) for path in paths]}" for key, paths in duplicates.items())
+        raise ValueError(f"delivery_id 在全部 Managed 工程中不唯一: {details}")
 
 
 def validate_registered_relationships(
@@ -178,16 +275,22 @@ def compose_release(
     delivery_paths: list[Path],
     projects: dict[str, dict[str, Any]],
     state_root: Path,
+    control_root: Path,
     *,
     environment: str = "test",
 ) -> Path:
+    assert_registered_delivery_paths(delivery_paths, projects, control_root)
+    assert_registered_delivery_states(delivery_paths, projects, control_root)
+    assert_global_delivery_ids(projects, control_root)
     deliveries = [load_manifest(path) for path in delivery_paths]
     errors = [error for item in deliveries for error in validate_delivery(item)]
     if errors:
         raise ValueError("Delivery 组合校验失败:\n- " + "\n- ".join(errors))
     verification_root = state_root / "control/delivery-verifications"
     for item in deliveries:
-        verification = StateStore(verification_root).read_json(item["manifest_digest"].removeprefix("sha256:") + ".json")
+        verification = StateStore(verification_root).read_json(
+            item["manifest_digest"].removeprefix("sha256:") + ".json"
+        )
         expected_artifacts = [
             {
                 "type": artifact["type"],
@@ -238,7 +341,14 @@ def compose_release(
     with store.lock(f"{release_id}.compose"):
         if target.exists():
             existing = load_manifest(target)
-            comparable = ("schema_version", "release_id", "environment", "composed_by", "dependency_order", "deliveries")
+            comparable = (
+                "schema_version",
+                "release_id",
+                "environment",
+                "composed_by",
+                "dependency_order",
+                "deliveries",
+            )
             if all(existing.get(key) == release.get(key) for key in comparable):
                 return target
             raise FileExistsError(f"Release {release_id} 已存在且组合不同，禁止原地覆盖")

@@ -2,7 +2,7 @@
 
 > ⚠️ **MAI-Harness 框架文件** — 请勿在项目中修改。如需变更请在框架工程中修改并覆盖到此项目。
 
-> AI 生成的产品需求规格文档索引。生成规范见 [../PRODUCT_SENSE.md](../PRODUCT_SENSE.md)。
+> AI 生成的产品需求规格文档索引。生成规范见 [PRODUCT_SENSE.md](../../.harness/docs/PRODUCT_SENSE.md)。
 > 每个文档须关联 [../../USER_STORIES.md](../../USER_STORIES.md) 中对应的 Story ID。
 
 ## 功能规格文档

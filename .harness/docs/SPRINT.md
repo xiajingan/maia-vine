@@ -67,7 +67,7 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
      ├─ Step 2: EXEC             → 启动子 Agent (agent_type: harness-exec)
      └─ Step 3: REVIEW           → 启动子 Agent (agent_type: harness-review)
          ├─ PASS → 执行 `sprint-gate ... --task-id <task-id> --phase review --strict` → 提交修改
-         └─ FAIL → 回到 Step 1 重新规划（最多 3 轮）
+         └─ FAIL → 回到 Step 1 重新规划（默认最多重试 9 次）
 ```
 
 ### Step 0: PRE-FLIGHT（编排者自行执行）
@@ -127,12 +127,12 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 2. **原文传递**：Step 1 → Step 2 传递执行计划原文，编排者不得改写或补充
 3. **独立执行**：每个子 Agent 自主加载所需规范文件，编排者不代为加载后粘贴
 4. **顺序阻塞**：Step 1 完成后才启动 Step 2，Step 2 完成后才启动 Step 3
-5. **失败重试**：Step 3 FAIL 时，将 Review 反馈传递给 Step 1 重新规划，最多 3 轮
+5. **失败重试**：Step 3 FAIL 时，将 Review 反馈传递给 Step 1 重新规划；上限读取 `config/harness.yml#task_execution.max_review_retries`（默认 9 次，不含初始轮次）
 6. **轮次隔离**：FAIL 后使用 `sprint-gate ... --new-attempt --increment-retry` 创建新轮次；旧轮次 Action/Review 证据不得复用
 
 ### FAIL 重试协议
 
-REVIEW FAIL 时，任务进入重试循环（最多 3 轮），始终走完整 Step 1 → Step 2 → Step 3：
+REVIEW FAIL 时，任务进入重试循环（默认最多重试 9 次，不含初始轮次），始终走完整 Step 1 → Step 2 → Step 3：
 
 1. **Step 1 PLAN**：传入 Review 反馈原文 + 原执行计划路径，harness-plan 自主生成修复计划
 2. **Step 2 EXEC**：harness-exec 按修复计划执行
@@ -222,7 +222,7 @@ Control 仍使用统一 Sprint 编排，不建立独立命令式工作流。用�
 | 系统集成 | `delivery-verify` → `release-compose` → `test-deploy` → `test-integration` |
 | 发布 | `release-promote`；失败时 `integration-finding` 或 `release-rollback` |
 
-`assignment-dispatch` 从 Control `USER_STORIES.md` 的 Story 派生 Assignment JSON，并保留 `control_requirement_id`；用户无需先手写 JSON 或直接运行 CLI。CLI 是 Skill/Agent 在 Step 0/2 调用的稳定执行端口，CI/Lint 是验证门禁，Commit/PR 是任务产物，均不是与 Sprint 并列的入口。Control Sprint 不创建业务代码任务，也不修改 Managed 工程内部状态。
+`assignment-dispatch` 从 Control `USER_STORIES.md` 的 Story 派生 `product` 或 `architecture` Assignment，并以 `source_reference` 保留追溯；消费工程也可从本地 Story/Task 派生 `dependency` Assignment。用户无需先手写 JSON 或直接运行 CLI。CLI 是 Skill/Agent 在 Step 0/2 调用的稳定执行端口，CI/Lint 是验证门禁，Commit/PR 是任务产物，均不是与 Sprint 并列的入口。Assignment 只写需求输入，不创建目标工程代码任务，也不修改其 Sprint 状态。
 
 ### Hotfix
 

@@ -8,6 +8,7 @@ runtime:
     - .harness/rules/task-rules.yml
   specification_files:
     - SPRINT.md
+    - ASSIGNMENTS.md
     - PRODUCT_SENSE.md
     - DESIGN.md
     - UI_DESIGN_SYSTEM.md

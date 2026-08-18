@@ -12,7 +12,9 @@ from typing import Any
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
+REFERENCE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
 ASSIGNMENT_DECISIONS = {"accepted", "accepted_with_changes", "deferred", "rejected"}
+ASSIGNMENT_TYPES = {"product", "architecture", "dependency"}
 
 
 def canonical_bytes(value: dict[str, Any]) -> bytes:
@@ -36,25 +38,64 @@ def require_id(value: Any, field: str, errors: list[str]) -> None:
         errors.append(f"{field}: 必须是稳定 ID（小写字母、数字、._-）")
 
 
+def require_reference(value: Any, field: str, errors: list[str]) -> None:
+    if not isinstance(value, str) or not REFERENCE_PATTERN.fullmatch(value):
+        errors.append(f"{field}: 必须是稳定引用（字母、数字、._-）")
+
+
 def validate_assignment(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
         return ["Assignment Manifest: 必须是对象"]
-    for field in ("assignment_id", "control_requirement_id", "target_project_id", "idempotency_key"):
+    for field in ("assignment_id", "source_project_id", "target_project_id", "idempotency_key"):
         require_id(data.get(field), field, errors)
-    for field in (
-        "outcome",
-        "acceptance",
-        "priority",
-        "suggested_sprint_window",
-        "deadline",
-        "coordination_contact",
-        "adjustment_scope",
-    ):
+    require_reference(data.get("source_reference"), "source_reference", errors)
+    if data.get("assignment_type") not in ASSIGNMENT_TYPES:
+        errors.append(f"assignment_type: 必须是 {sorted(ASSIGNMENT_TYPES)}")
+    for field in ("outcome", "acceptance", "priority"):
         if not data.get(field):
             errors.append(f"{field}: 必填")
-    if data.get("schema_version") != 1:
-        errors.append("schema_version: 必须为 1")
+    if not isinstance(data.get("acceptance"), list) or not all(
+        isinstance(item, str) and item.strip() for item in data.get("acceptance", [])
+    ):
+        errors.append("acceptance: 必须是非空字符串数组")
+    if data.get("schema_version") != 2:
+        errors.append("schema_version: 必须为 2")
+    return errors
+
+
+def validate_assignment_response(
+    data: dict[str, Any], *, assignment: dict[str, Any] | None = None, project_id: str = ""
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return ["Assignment Response: 必须是对象"]
+    for field in ("assignment_id", "source_project_id", "project_id"):
+        require_id(data.get(field), field, errors)
+    require_reference(data.get("source_reference"), "source_reference", errors)
+    if data.get("schema_version") != 2:
+        errors.append("schema_version: 必须为 2")
+    if data.get("assignment_type") not in ASSIGNMENT_TYPES:
+        errors.append(f"assignment_type: 必须是 {sorted(ASSIGNMENT_TYPES)}")
+    if data.get("decision") not in ASSIGNMENT_DECISIONS:
+        errors.append(f"decision: 必须是 {sorted(ASSIGNMENT_DECISIONS)}")
+    if not isinstance(data.get("reason"), str) or not data["reason"].strip():
+        errors.append("reason: 必填")
+    if str(data.get("decision", "")).startswith("accepted") and not data.get("local_story"):
+        errors.append("local_story: 接受 Assignment 时必填")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(data.get("assignment_digest", ""))):
+        errors.append("assignment_digest: 必须是 SHA-256")
+    recorded = data.get("manifest_digest")
+    if not recorded or recorded != digest(_without(data, "manifest_digest")):
+        errors.append("manifest_digest: 与 Assignment Response 内容不一致")
+    if project_id and data.get("project_id") != project_id:
+        errors.append(f"project_id: 必须是当前工程 {project_id}")
+    if assignment:
+        for field in ("assignment_id", "assignment_type", "source_project_id", "source_reference"):
+            if data.get(field) != assignment.get(field):
+                errors.append(f"{field}: 与 Assignment 不一致")
+        if data.get("assignment_digest") != assignment.get("manifest_digest"):
+            errors.append("assignment_digest: 与 Assignment 不一致")
     return errors
 
 
@@ -62,8 +103,12 @@ def validate_delivery(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
         return ["Delivery Manifest: 必须是对象"]
-    for field in ("delivery_id", "assignment_id", "project_id", "source_commit"):
+    for field in ("delivery_id", "assignment_id", "project_id"):
         require_id(data.get(field), field, errors)
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", str(data.get("source_commit", ""))):
+        errors.append("source_commit: 必须是完整 Git object ID（SHA-1 或 SHA-256）")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(data.get("assignment_digest", ""))):
+        errors.append("assignment_digest: 必须是 SHA-256")
     if data.get("schema_version") != 1:
         errors.append("schema_version: 必须为 1")
     quality = data.get("quality")
@@ -79,7 +124,7 @@ def validate_delivery(data: dict[str, Any]) -> list[str]:
                 continue
             ref = str(item.get("ref", ""))
             artifact_type = item.get("type")
-            if artifact_type not in {"oci-image", "helm-chart", "client-package"}:
+            if artifact_type not in {"oci-image", "helm-chart", "client-package", "dependency-package"}:
                 errors.append(f"artifacts[{index}].type: 非法制品类型")
                 continue
             if not ref or "latest" in ref.lower():
@@ -90,12 +135,32 @@ def validate_delivery(data: dict[str, Any]) -> list[str]:
                 r"sha256:[0-9a-f]{64}", str(item.get("digest", ""))
             ):
                 errors.append(f"artifacts[{index}].digest: 必须是 sha256 内容摘要")
-            if item.get("type") == "client-package" and not item.get("sha256"):
-                errors.append(f"artifacts[{index}].sha256: client-package 必填")
-            elif item.get("type") == "client-package" and not re.fullmatch(
+            if item.get("type") in {"client-package", "dependency-package"} and not item.get("sha256"):
+                errors.append(f"artifacts[{index}].sha256: package 必填")
+            elif item.get("type") in {"client-package", "dependency-package"} and not re.fullmatch(
                 r"(?:sha256:)?[0-9a-f]{64}", str(item.get("sha256", ""))
             ):
                 errors.append(f"artifacts[{index}].sha256: 必须是 SHA-256")
+            if item.get("type") == "dependency-package":
+                for field in ("package", "version"):
+                    if not isinstance(item.get(field), str) or not item[field].strip():
+                        errors.append(f"artifacts[{index}].{field}: dependency-package 必填")
+                package = str(item.get("package", ""))
+                version = str(item.get("version", ""))
+                normalized_package = r"[-_.]+".join(re.escape(part) for part in re.split(r"[-_.]+", package))
+                package_sha = str(item.get("sha256", "")).removeprefix("sha256:")
+                if (
+                    package
+                    and version
+                    and not re.search(
+                        rf"/{normalized_package}-{re.escape(version)}[^/]*\.(?:whl|tar\.gz)#sha256={package_sha}$",
+                        ref,
+                        re.IGNORECASE,
+                    )
+                ):
+                    errors.append(
+                        f"artifacts[{index}].ref: dependency-package 必须以 package/version 文件名和 #sha256 绑定"
+                    )
             if item.get("type") == "client-package":
                 client_digest = str(item.get("sha256", "")).removeprefix("sha256:")
                 if not re.search(rf"/(?:sha256:)?{re.escape(client_digest)}(?:/|\.|$)", ref):
@@ -106,13 +171,13 @@ def validate_delivery(data: dict[str, Any]) -> list[str]:
                     errors.append(f"artifacts[{index}].version: Helm Chart 必填")
                 if item.get("digest") and not ref.endswith("@" + str(item["digest"])):
                     errors.append(f"artifacts[{index}].ref: Helm Chart 必须以 @digest 固定内容")
-            if item.get("type") in {"oci-image", "helm-chart", "client-package"}:
+            if item.get("type") in {"oci-image", "helm-chart", "client-package", "dependency-package"}:
                 artifact_digest = (
                     str(item.get("digest", ""))
-                    if item.get("type") != "client-package"
+                    if item.get("type") not in {"client-package", "dependency-package"}
                     else "sha256:" + str(item.get("sha256", "")).removeprefix("sha256:")
                 )
-                if item.get("type") != "client-package" and not ref.endswith("@" + artifact_digest):
+                if item.get("type") in {"oci-image", "helm-chart"} and not ref.endswith("@" + artifact_digest):
                     errors.append(f"artifacts[{index}].ref: OCI 制品必须以 @digest 固定内容")
                 evidence_prefixes = {"signature": "signature://", "sbom": "sbom://", "build_once_evidence": "build://"}
                 for field, prefix in evidence_prefixes.items():
@@ -147,6 +212,42 @@ def validate_delivery(data: dict[str, Any]) -> list[str]:
         errors.append("manifest_digest: 必填")
     elif recorded != digest(_without(data, "manifest_digest", "published_at")):
         errors.append("manifest_digest: 与当前 Delivery 内容不一致")
+    return errors
+
+
+def delivery_artifact_identities(data: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {
+            "type": str(artifact.get("type", "")),
+            "ref": str(artifact.get("ref", "")),
+            "digest": str(
+                artifact.get("digest") or "sha256:" + str(artifact.get("sha256", "")).removeprefix("sha256:")
+            ),
+        }
+        for artifact in data.get("artifacts", [])
+    ]
+
+
+def validate_delivery_verification(delivery: dict[str, Any], receipt: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(receipt, dict) or receipt.get("status") != "passed":
+        return ["供应链验证 receipt.status 必须为 passed"]
+    if receipt.get("manifest_digest") != delivery.get("manifest_digest"):
+        errors.append("供应链验证 receipt 未绑定当前 Delivery")
+    if receipt.get("artifacts") != delivery_artifact_identities(delivery):
+        errors.append("供应链验证 receipt 未覆盖当前全部 Artifact")
+    if not isinstance(receipt.get("verifiers"), list) or not receipt["verifiers"]:
+        errors.append("供应链验证 receipt 缺少 verifier 证据")
+    elif any(
+        not isinstance(item, dict)
+        or item.get("returncode") != 0
+        or not all(item.get(field) is True for field in ("signature", "sbom", "build_once"))
+        for item in receipt["verifiers"]
+    ):
+        errors.append("供应链验证 receipt 未证明签名、SBOM 与 Build Once")
+    recorded = receipt.get("receipt_digest")
+    if not recorded or recorded != digest(_without(receipt, "receipt_digest")):
+        errors.append("供应链验证 receipt 摘要无效")
     return errors
 
 

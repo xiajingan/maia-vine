@@ -62,6 +62,15 @@ def validate_mode_config(config: dict[str, Any]) -> list[str]:
             value = management.get(key)
             if value and (Path(value).is_absolute() or ".." in Path(value).parts):
                 errors.append(f"management.{key}: 必须是工程内相对路径")
+        verification_commands = management.get("supply_chain_verification_commands", [])
+        if not isinstance(verification_commands, list) or any(
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(item, str) and item for item in command)
+            or not any("{manifest}" in item for item in command)
+            for command in verification_commands
+        ):
+            errors.append("management.supply_chain_verification_commands: 必须是包含 {manifest} 的 argv 数组列表")
         control_path = management.get("control_path")
         if control_path and Path(control_path).is_absolute():
             errors.append("management.control_path: 必须是相对 Managed 的路径")

@@ -1,10 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "assignment_id", "project_id", "decision", "reason"],
+  "required": ["schema_version", "assignment_id", "assignment_type", "source_project_id", "source_reference", "project_id", "decision", "reason", "assignment_digest", "manifest_digest"],
   "properties": {
-    "schema_version": {"const": 1},
-    "decision": {"enum": ["accepted", "accepted_with_changes", "deferred", "rejected"]}
+    "schema_version": {"const": 2},
+    "assignment_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+    "assignment_type": {"enum": ["product", "architecture", "dependency"]},
+    "source_project_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+    "source_reference": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$"},
+    "project_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+    "decision": {"enum": ["accepted", "accepted_with_changes", "deferred", "rejected"]},
+    "reason": {"type": "string", "minLength": 1},
+    "local_story": {"type": "string", "minLength": 1},
+    "local_sprint": {"type": "string"},
+    "assignment_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
   },
+  "allOf": [
+    {
+      "if": {"properties": {"decision": {"enum": ["accepted", "accepted_with_changes"]}}},
+      "then": {"required": ["local_story"]}
+    }
+  ],
   "additionalProperties": true
 }

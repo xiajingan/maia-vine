@@ -63,7 +63,7 @@ COMMANDS = {
 }
 COMMANDS.update(
     {
-        "assignment": _command("assignment", frozenset({"managed"})),
+        "assignment": _command("assignment"),
         "delivery": _command("delivery", frozenset({"managed"})),
         "acceptance-record": _command("acceptance_record", frozenset({"standalone", "managed"})),
         "worktree": _command("worktree", frozenset({"standalone", "managed"})),

@@ -6,6 +6,8 @@
 
 Vine 加载 Stem 签发、Celt 转交的 Todo 人机步骤，呈现表单、预览和确认并通过版本化 Celt Bridge 请求受控能力、回传结果。Workflow/分支/失败/子流程由 Stem 控制，Action/Operation 由 Celt 执行；Vine 不定义业务工作流、不持有 Secret、不决定权限或最终状态。
 
+Vine 不依赖 Python 后端公共库 Seed，也不向 Seed 提交 Dependency Assignment。前端公共能力留在 Vine 自身前端基础层或 Celt Bridge/服务 OpenAPI 契约中，不通过 Python Wheel 或 Seed adapter 间接引入。
+
 ## 2. 结构与契约
 
 `transport` 负责消费 Celt 发布的 Bridge 握手/消息 Schema；`runtime` 负责上下文、协议兼容和恢复；`features` 只负责有类型的人机 Step renderer；`components` 只含 UI；`telemetry` 产生脱敏行为事件。Vine 不拥有 Bridge wire contract，也不手写协议 DTO。上下文固定 `tenant/task/todo/execution/attempt/fencing/terminal/action/workflow` 版本、目标/参数摘要、幂等键、允许能力、Vine digest、协议版本、过期时间和 Stem 签名。

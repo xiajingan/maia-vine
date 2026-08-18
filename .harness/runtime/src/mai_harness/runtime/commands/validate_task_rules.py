@@ -122,18 +122,27 @@ def validate(doc: Any, root: Path) -> Validation:
         error(f"sprint_type_sequences 必须完整声明: {sorted(expected_sprint_types)}")
         sequences = {}
     for sprint_type, stages in sequences.items():
-        stage_tasks = [stage.get("tasks", []) if isinstance(stage, dict) else [] for stage in stages] if isinstance(stages, list) else []
+        stage_tasks = (
+            [stage.get("tasks", []) if isinstance(stage, dict) else [] for stage in stages]
+            if isinstance(stages, list)
+            else []
+        )
         flattened = [name for stage in stage_tasks for name in stage] if isinstance(stages, list) else []
         valid_names = all(isinstance(name, str) and name for name in flattened)
         if (
             not isinstance(stages, list)
-            or any(not isinstance(stage, dict) or not isinstance(stage.get("tasks"), list) or not stage["tasks"] for stage in stages)
+            or any(
+                not isinstance(stage, dict) or not isinstance(stage.get("tasks"), list) or not stage["tasks"]
+                for stage in stages
+            )
             or any(stage.get("require", "all") not in {"all", "any"} for stage in stages)
             or not valid_names
             or (valid_names and len(flattened) != len(set(flattened)))
             or (valid_names and set(flattened) != set(sprint_matrix.get(sprint_type, [])))
         ):
-            error(f"sprint_type_sequences.{sprint_type} 必须完整覆盖能力矩阵，且阶段含 tasks、require=all|any、任务不重复")
+            error(
+                f"sprint_type_sequences.{sprint_type} 必须完整覆盖能力矩阵，且阶段含 tasks、require=all|any、任务不重复"
+            )
     type_mode_matrix = doc.get("sprint_type_mode_capabilities")
     if not isinstance(type_mode_matrix, dict) or set(type_mode_matrix) != {"standalone", "managed", "control"}:
         error("sprint_type_mode_capabilities 必须完整声明三种模式")

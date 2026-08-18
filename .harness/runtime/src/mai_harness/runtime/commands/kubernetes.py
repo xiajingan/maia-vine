@@ -75,7 +75,9 @@ def deploy_release(
     removed: list[str] = []
     if execute and environment == "prod":
         ledger = StateStore(PATHS.state / "releases").read_json("stable.json", {})
-        current_manifest = str(baseline_manifest.resolve()) if baseline_manifest else (ledger.get("current") or {}).get("manifest")
+        current_manifest = (
+            str(baseline_manifest.resolve()) if baseline_manifest else (ledger.get("current") or {}).get("manifest")
+        )
         if current_manifest and Path(current_manifest).resolve() != manifest:
             current = load_manifest(Path(current_manifest))
             current_ids = {
@@ -104,7 +106,9 @@ def deploy_release(
                     "cluster": policy["cluster"],
                     "namespace": policy["namespace"],
                 },
-                "producer": "mai-harness:control.test.deploy" if environment == "test" else "mai-harness:control.release",
+                "producer": "mai-harness:control.test.deploy"
+                if environment == "test"
+                else "mai-harness:control.release",
                 "status": "applied",
             },
         )

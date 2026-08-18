@@ -43,7 +43,9 @@ class StateStore:
                 break
             except FileExistsError:
                 if time.monotonic() >= deadline:
-                    raise StateLockTimeout(f"状态锁超时: {lock_path}；禁止自动抢占，请确认持有者状态后执行受控恢复") from None
+                    raise StateLockTimeout(
+                        f"状态锁超时: {lock_path}；禁止自动抢占，请确认持有者状态后执行受控恢复"
+                    ) from None
                 time.sleep(0.05)
         stop_heartbeat = threading.Event()
 

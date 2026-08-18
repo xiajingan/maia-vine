@@ -9,7 +9,9 @@ from pathlib import Path
 
 from mai_harness.runtime.application.control import (
     ControlAssignmentService,
+    assert_global_delivery_ids,
     assert_registered_delivery_paths,
+    assert_registered_delivery_states,
     complete_rollback,
     compose_release,
     load_managed_projects,
@@ -83,7 +85,7 @@ def main() -> int:
     elif args.command == "assignment-dispatch":
         projects = load_managed_projects(managed_path)
         validate_registered_relationships(projects, PATHS.project, harness["project"]["id"])
-        service = ControlAssignmentService(PATHS.state, projects)
+        service = ControlAssignmentService(PATHS.state, projects, harness["project"]["id"])
         result = service.dispatch(load_manifest(args.manifest), PATHS.project)
         print(
             json.dumps(
@@ -102,6 +104,8 @@ def main() -> int:
     elif args.command == "delivery-verify":
         projects = load_managed_projects(managed_path)
         assert_registered_delivery_paths([args.manifest], projects, PATHS.project)
+        assert_registered_delivery_states([args.manifest], projects, PATHS.project)
+        assert_global_delivery_ids(projects, PATHS.project)
         delivery = load_manifest(args.manifest)
         if errors := validate_delivery(delivery):
             parser.error("Delivery 校验失败: " + "; ".join(errors))
@@ -156,7 +160,7 @@ def main() -> int:
         projects = load_managed_projects(managed_path)
         deliveries = [Path(value) for item in args.deliveries for value in str(item).split(",") if value]
         assert_registered_delivery_paths(deliveries, projects, PATHS.project)
-        target = compose_release(args.release_id, deliveries, projects, PATHS.state)
+        target = compose_release(args.release_id, deliveries, projects, PATHS.state, PATHS.project)
         print(json.dumps({"manifest": str(target)}, ensure_ascii=False))
     elif args.command in {"release-promote", "release-rollback"}:
         current_release = load_manifest(args.manifest)
@@ -173,7 +177,11 @@ def main() -> int:
                 parser.error("Release 已提升且没有可恢复的同轮操作日志")
             promote_stable_release(PATHS.state, args.manifest, current_release)
             operation_store.write_json(operation_name, {**operation, "status": "complete"})
-            print(json.dumps({"manifest": str(args.manifest), "release": current_release, "reconciled": True}, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {"manifest": str(args.manifest), "release": current_release, "reconciled": True}, ensure_ascii=False
+                )
+            )
             return 0
         if args.command == "release-rollback" and current_release.get("status") == "rolled-back":
             if operation.get("status") != "deployed" or operation.get("manifest_digest") != current_release.get(
@@ -182,12 +190,14 @@ def main() -> int:
                 parser.error("Release 已回滚且没有可恢复的同轮操作日志")
             complete_rollback(PATHS.state, args.manifest)
             operation_store.write_json(operation_name, {**operation, "status": "complete"})
-            print(json.dumps({"manifest": str(args.manifest), "release": current_release, "reconciled": True}, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {"manifest": str(args.manifest), "release": current_release, "reconciled": True}, ensure_ascii=False
+                )
+            )
             return 0
         deploy_manifest = (
-            args.manifest
-            if args.command == "release-promote"
-            else resolve_rollback_release(PATHS.state, args.manifest)
+            args.manifest if args.command == "release-promote" else resolve_rollback_release(PATHS.state, args.manifest)
         )
         deployed_release = load_manifest(deploy_manifest)
         expected = "test-verified" if args.command == "release-promote" else "promoted"
@@ -204,7 +214,9 @@ def main() -> int:
             else:
                 complete_rollback(PATHS.state, args.manifest)
             operation_store.write_json(operation_name, {**operation, "status": "complete"})
-            print(json.dumps({"manifest": str(args.manifest), "release": result, "reconciled": True}, ensure_ascii=False))
+            print(
+                json.dumps({"manifest": str(args.manifest), "release": result, "reconciled": True}, ensure_ascii=False)
+            )
             return 0
         operation_store.write_json(
             operation_name,
@@ -328,9 +340,7 @@ def main() -> int:
             promote_stable_release(PATHS.state, args.manifest, result)
         else:
             complete_rollback(PATHS.state, args.manifest)
-        operation_store.write_json(
-            operation_name, {**operation_store.read_json(operation_name), "status": "complete"}
-        )
+        operation_store.write_json(operation_name, {**operation_store.read_json(operation_name), "status": "complete"})
         print(json.dumps({"manifest": str(args.manifest), "release": result, "evidence": evidence}, ensure_ascii=False))
     elif args.command == "release-transition":
         result = transition_release(args.manifest, args.status, evidence=args.evidence)

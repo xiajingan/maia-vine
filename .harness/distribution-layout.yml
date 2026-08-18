@@ -24,6 +24,7 @@ fixed:
 
 legacy_managed:
   - docs/SPRINT.md
+  - docs/ASSIGNMENTS.md
   - docs/PRODUCT_SENSE.md
   - docs/DESIGN.md
   - docs/UI_DESIGN_SYSTEM.md

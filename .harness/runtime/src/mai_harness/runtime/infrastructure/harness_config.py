@@ -29,6 +29,7 @@ SCHEMA = {
     "project.stack": (str, {"python-backend", "fullstack", "frontend"}),
     "automation.enabled": (bool, None),
     "automation.default_mode": (str, {"report-only", "safe-fix"}),
+    "task_execution.max_review_retries": (int, range(0, 101)),
     "walkthrough_env": (str, {"development", "test"}),
     "gates.ui_design_l3": (bool, None),
     "gates.quality_threshold": (int, range(1, 101)),
@@ -76,7 +77,11 @@ def validate(config: dict[str, Any]) -> list[str]:
     for name, condition in conditions.items():
         if name not in command_names:
             errors.append(f"command_conditions.{name}: 未定义对应命令")
-        if not isinstance(condition, dict) or set(condition) - {"file_exists", "package_dependencies", "package_scripts"}:
+        if not isinstance(condition, dict) or set(condition) - {
+            "file_exists",
+            "package_dependencies",
+            "package_scripts",
+        }:
             errors.append(f"command_conditions.{name}: 仅允许 file_exists/package_dependencies/package_scripts")
             continue
         if not isinstance(condition.get("file_exists"), str) or not condition["file_exists"]:
@@ -116,7 +121,9 @@ def validate(config: dict[str, Any]) -> list[str]:
         for name in ("integration_commands", "production_verification_commands", "supply_chain_verification_commands"):
             commands = config.get("control", {}).get(name, [])
             if not isinstance(commands, list) or any(
-                not isinstance(command, list) or not command or not all(isinstance(item, str) and item for item in command)
+                not isinstance(command, list)
+                or not command
+                or not all(isinstance(item, str) and item for item in command)
                 for command in commands
             ):
                 errors.append(f"control.{name}: 必须是 argv 数组列表")

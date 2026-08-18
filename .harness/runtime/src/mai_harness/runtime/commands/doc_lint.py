@@ -97,9 +97,10 @@ def lint_docs(
             if file.name != "index.md" and file.name not in content:
                 add("warning", f"未索引: {file} 不在 {index} 中")
 
+    specifications = root / ".harness/docs"
     for spec in REQUIRED_SPECS:
-        if not (docs / spec).exists():
-            add("error", f"缺少规范: {docs / spec}")
+        if not (specifications / spec).exists():
+            add("error", f"缺少规范: {specifications / spec}")
     for file in sorted(docs.glob("*.md")):
         first_lines = file.read_text(encoding="utf-8").splitlines()[:5]
         if not any(re.match(r"^# ", line) for line in first_lines):

@@ -120,8 +120,10 @@ def task_keyword(text: str) -> str:
 def task_status(keyword: str, content: str, statuses: dict[str, list[str]], result: GateResult) -> str:
     found = statuses.get(keyword, [])
     if found:
-        return "done" if all(DONE.match(status) for status in found) else next(
-            (status for status in found if not DONE.match(status)), found[-1]
+        return (
+            "done"
+            if all(DONE.match(status) for status in found)
+            else next((status for status in found if not DONE.match(status)), found[-1])
         )
     matches = [
         match.group(1)
@@ -277,7 +279,9 @@ def evaluate(
         if stage_index is None:
             result.blocked.append(f"任务 {task_type} 未登记到 sprint_type={sprint_type} 的执行序列")
             return result
-        duplicate_ids = sorted({row_id for row_id, _, _ in task_rows if row_id and sum(r[0] == row_id for r in task_rows) > 1})
+        duplicate_ids = sorted(
+            {row_id for row_id, _, _ in task_rows if row_id and sum(r[0] == row_id for r in task_rows) > 1}
+        )
         if duplicate_ids:
             result.blocked.append(f"Sprint 任务 ID 重复: {', '.join(duplicate_ids)}")
             return result
@@ -301,7 +305,11 @@ def evaluate(
                 result.blocked.append(f"前序阶段未列入 Sprint: {', '.join(applicable)}")
                 continue
             outcome = task.get("upstream_outcome") or {}
-            expected = {str(status).lower() for status in outcome.get("statuses", [])} if outcome.get("task") in present else set()
+            expected = (
+                {str(status).lower() for status in outcome.get("statuses", [])}
+                if outcome.get("task") in present
+                else set()
+            )
             requirement = earlier_stage.get("require", "all") if isinstance(earlier_stage, dict) else "all"
             completed = {
                 name
@@ -345,7 +353,9 @@ def evaluate(
                 result.warnings.append(f"前置条件需人工确认: {prerequisite}")
     satisfied_any: list[str] = []
     for group in task.get("prerequisites_any", []):
-        local_group = [key for key in group if not type_capabilities or any(key in stage_tasks(stage) for stage in stages)]
+        local_group = [
+            key for key in group if not type_capabilities or any(key in stage_tasks(stage) for stage in stages)
+        ]
         if not local_group:
             result.passed.append(f"跨 Sprint 任一前置由输入门禁承担: {', '.join(group)}")
             continue
@@ -384,7 +394,7 @@ def evaluate(
         source_rows = [row for row in task_rows if row[1] == outcome.get("task")]
         for source_id, source_type, _ in source_rows:
             source_task = (rules.get("tasks") or {}).get(source_type, {})
-            source_action = ((source_task.get("execute") or {}).get("action"))
+            source_action = (source_task.get("execute") or {}).get("action")
             result.blocked.extend(
                 validate_failed_action_evidence(
                     root,
@@ -426,10 +436,13 @@ def evaluate(
                 f"源 Sprint 审批身份匹配: {source_sprint}",
                 f"源 Sprint 审批身份不匹配: {record.get('sprint', '缺失')} != {source_sprint}",
             )
-            commit_exists = bool(re.fullmatch(r"[a-f0-9]{7,40}", commit)) and try_run(
-                ["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=root
-            ).ok
-            result.check(commit_exists, f"源 Sprint commit 有效: {commit}", f"源 Sprint commit 无效: {commit or '缺失'}")
+            commit_exists = (
+                bool(re.fullmatch(r"[a-f0-9]{7,40}", commit))
+                and try_run(["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=root).ok
+            )
+            result.check(
+                commit_exists, f"源 Sprint commit 有效: {commit}", f"源 Sprint commit 无效: {commit or '缺失'}"
+            )
     for name in upstream:
         definition = (rules.get("tasks") or {}).get(name, {})
         output = definition.get("outputs", {}).get("path", "")
@@ -624,7 +637,7 @@ def main() -> int:
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--phase", choices=("preflight", "review"), default="preflight")
     parser.add_argument("--task-id", required=True)
-    parser.add_argument("--max-retry", type=int, default=3)
+    parser.add_argument("--max-retry", type=int, help="临时覆盖 harness.yml#task_execution.max_review_retries")
     parser.add_argument("--increment-retry", action="store_true")
     parser.add_argument("--reset-retry", action="store_true")
     parser.add_argument("--new-attempt", action="store_true", help="Review FAIL 后开始全新的 Plan/Exec/Review 轮次")
@@ -644,16 +657,22 @@ def main() -> int:
         return 1
     ttl = args.preflight_ttl or int((rules.get("sprint_preflight") or {}).get("ttl_seconds", 600))
     result = GateResult()
+    harness_config = load_harness_config()
+    max_retry = (
+        args.max_retry if args.max_retry is not None else int(harness_config["task_execution"]["max_review_retries"])
+    )
+    if not 0 <= max_retry <= 100:
+        parser.error("Review 重试上限必须是 0 到 100 的整数")
     retry_gate(
         root,
         args.sprint_plan_file.stem,
         args.task_id or args.task_type,
-        args.max_retry,
+        max_retry,
         "reset" if args.reset_retry else "increment" if args.increment_retry else None,
         result,
     )
     preflight_id = (rules.get("sprint_preflight") or {}).get("action", "")
-    mode = load_harness_config()["project"]["mode"]
+    mode = harness_config["project"]["mode"]
     task = (rules.get("tasks") or {}).get(args.task_type, {})
     if args.phase == "preflight":
         # Revoke any previous executable attempt before running checks that may
