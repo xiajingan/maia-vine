@@ -80,7 +80,7 @@ assets:
     sha256: b82e1c775958456d22e3d491c2080353bfd52866d349e804b91d602b37737526
   .harness/.gitignore:
     policy: managed-overwrite
-    sha256: eb81389a4bddfa55e947b64bb920c87753794ee445cb9a4ae8d65181adce82af
+    sha256: bda6da24ffb116f2d65cccb0e2ec3b208770f6e9528d9e9efdb2ba3f0fdc982d
   .harness/README.md:
     policy: managed-overwrite
     sha256: 3aa1666d327080f293e0d476d97995d521665063b5884eeed69872b3c565b9d8
@@ -497,7 +497,7 @@ assets:
     sha256: 270575ebcefac9008d4410b2f07f20c20398e761181d5872243519c0d4015822
   .harness/state/.gitignore:
     policy: managed-overwrite
-    sha256: fd9d62733ca3d8c052da9c5dfb9e748a01abd8324dc2cc4fa5471654d6e849c2
+    sha256: 436d7ed944a8a383942a921e14497ffea8b53549862fd4ce2436ee7e4774577e
   .harness/state/README.md:
     policy: managed-overwrite
     sha256: a5bf8107dc3591b46d69373c877bed1fd52db050d59efb682908ca5b19e25f5b

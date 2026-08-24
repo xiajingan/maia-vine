@@ -3,6 +3,12 @@ images/
 reports/
 runs/
 worktrees/
+retry/
+verify-reports/
+infra-ready-cache.json
+preflight.last-pass.json
+quality-runtime.env
+quality-runtime.env.tmp
 ports
 pids
 runtime/.venv/
