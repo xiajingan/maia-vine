@@ -64,7 +64,7 @@ workflows:
   control: [quality.yml, back-merge.yml, docs.yml, main-gate.yml, heartbeat.yml, pr-lint.yml]
 
 directories:
-  common: [docs/exec-plans/active, docs/exec-plans/completed, .harness/automation/runs, .harness/pipeline/runs]
+  common: [docs/exec-plans/active, docs/exec-plans/completed, .harness/runs, .harness/automation/runs, .harness/pipeline/runs]
   standalone: []
   managed: [docs/assignments/inbox, docs/assignments/responses, docs/deliveries]
   control: []

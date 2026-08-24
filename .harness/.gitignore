@@ -1,6 +1,10 @@
 # 中间过程数据：除 state/ 索引外不入库
 images/
 reports/
+runs/
+worktrees/
+ports
+pids
 runtime/.venv/
 **/__pycache__/
 **/*.pyc

@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from mai_harness.runtime.application.action_executor import action_argv, execute_action
+from mai_harness.runtime.application.sprint_context import (
+    validate_sprint_activation,
+    validate_sprint_context,
+)
 from mai_harness.runtime.application.task_evidence import (
     activate_attempt,
     ensure_attempt,
@@ -24,6 +28,7 @@ from mai_harness.runtime.application.task_evidence import (
 )
 from mai_harness.runtime.commands.validate_task_rules import validate as validate_rules
 from mai_harness.runtime.domain.actions import resolve_action
+from mai_harness.runtime.domain.sprint_context import table_rows
 from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.harness_config import load_harness_config
@@ -151,7 +156,13 @@ def fill_pattern(value: str, sprint_id: str) -> str:
 
 
 def retry_gate(
-    root: Path, sprint_id: str, task_id: str, max_retry: int, action: str | None, result: GateResult
+    root: Path,
+    sprint_id: str,
+    task_id: str,
+    max_retry: int,
+    action: str | None,
+    result: GateResult,
+    reason: str = "",
 ) -> None:
     directory = root / ".harness/retry"
     counter = directory / f"{sprint_id}-{task_id}.count"
@@ -166,8 +177,10 @@ def retry_gate(
         directory.mkdir(parents=True, exist_ok=True)
         counter.write_text(f"{current}\n", encoding="utf-8")
         with audit.open("a", encoding="utf-8") as stream:
+            suffix = f" reason={reason}" if reason else ""
             stream.write(
-                f"{datetime.now(UTC).isoformat()} {'RESET' if action == 'reset' else 'INCREMENT'} ({before} → {current})\n"
+                f"{datetime.now(UTC).isoformat()} {'RESET' if action == 'reset' else 'INCREMENT'} "
+                f"({before} → {current}){suffix}\n"
             )
     result.check(
         current <= max_retry,
@@ -579,7 +592,7 @@ def evaluate(
             result.blocked.append(f"harness.yml 加载失败: {exc}")
         else:
             result.warnings.append(f"harness.yml 加载失败: {exc}")
-    if task_type == "sprint-close" and approval:
+    if phase == "review" and task_type == "pr" and approval:
         approval_path = root / fill_pattern(approval, sprint_id)
         commit = str(load_yaml(approval_path).get("commit_sha", "")).strip() if approval_path.exists() else ""
         if not commit:
@@ -638,8 +651,10 @@ def main() -> int:
     parser.add_argument("--phase", choices=("preflight", "review"), default="preflight")
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--max-retry", type=int, help="临时覆盖 harness.yml#task_execution.max_review_retries")
-    parser.add_argument("--increment-retry", action="store_true")
-    parser.add_argument("--reset-retry", action="store_true")
+    retry_action = parser.add_mutually_exclusive_group()
+    retry_action.add_argument("--increment-retry", action="store_true")
+    retry_action.add_argument("--reset-retry", action="store_true")
+    parser.add_argument("--reset-retry-reason")
     parser.add_argument("--new-attempt", action="store_true", help="Review FAIL 后开始全新的 Plan/Exec/Review 轮次")
     parser.add_argument("--preflight-ttl", type=int)
     args = parser.parse_args()
@@ -661,16 +676,52 @@ def main() -> int:
     max_retry = (
         args.max_retry if args.max_retry is not None else int(harness_config["task_execution"]["max_review_retries"])
     )
-    if not 0 <= max_retry <= 100:
-        parser.error("Review 重试上限必须是 0 到 100 的整数")
+    if not 0 <= max_retry <= 5:
+        parser.error("Review 重试上限必须是 0 到 5 的整数")
+    if args.reset_retry and not args.reset_retry_reason:
+        parser.error("--reset-retry 必须同时提供 --reset-retry-reason")
+    if args.new_attempt and not args.increment_retry:
+        parser.error("--new-attempt 必须与 --increment-retry 同时使用")
+    if args.phase != "preflight" and (args.increment_retry or args.reset_retry or args.new_attempt):
+        parser.error("重试状态只能在 preflight 阶段变更")
+    result.blocked.extend(
+        validate_sprint_context(
+            root,
+            args.sprint_plan_file.resolve(),
+            rules,
+            allow_completed=args.task_type == "pr",
+        )
+    )
+    result.blocked.extend(validate_sprint_activation(root, args.sprint_plan_file.resolve()))
+    sprint_rows = table_rows(args.sprint_plan_file.read_text(encoding="utf-8"))
+    task_row = next((row for row in sprint_rows if row.get("id") == args.task_id), {})
+    row_type = task_row.get("类型") or task_row.get("type")
+    if not task_row:
+        result.blocked.append(f"任务 ID 未登记在 Sprint 计划中: {args.task_id}")
+    elif row_type != args.task_type:
+        result.blocked.append(f"任务 ID/类型不匹配: {args.task_id}={row_type}, requested={args.task_type}")
+    if result.blocked:
+        for message in result.blocked:
+            print(f"❌ {message}")
+        print("BLOCKED")
+        return 1
+    origin = task_row.get("来源") or task_row.get("origin")
+    parent = task_row.get("父任务") or task_row.get("parent")
+    retry_budget_id = parent if origin == "remediation" and parent else args.task_id
     retry_gate(
         root,
         args.sprint_plan_file.stem,
-        args.task_id or args.task_type,
+        retry_budget_id or args.task_type,
         max_retry,
         "reset" if args.reset_retry else "increment" if args.increment_retry else None,
         result,
+        args.reset_retry_reason or "",
     )
+    if result.blocked:
+        for message in result.blocked:
+            print(f"❌ {message}")
+        print("BLOCKED")
+        return 1
     preflight_id = (rules.get("sprint_preflight") or {}).get("action", "")
     mode = harness_config["project"]["mode"]
     task = (rules.get("tasks") or {}).get(args.task_type, {})

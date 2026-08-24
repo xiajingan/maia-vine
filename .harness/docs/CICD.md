@@ -26,7 +26,7 @@ Compose 字段；`cloud-native` 使用 Kubernetes context、cluster identity、n
 | **R6 PR/MR 走适配器** | Agent 不直接调 `gh`/`glab` | ESLint `harness/no-direct-vcs-cli` + `harness pr-adapter` |
 | **R7 L3 双门禁** | `product-acceptance`（功能）+ `release-approval`（上线）独立记录 | `.harness/rules/task-rules.yml` 两条 gate=L3 |
 | **R8 环境锁单写** | test 环境同一时刻仅 1 个 owner（promote 或 release） | `harness lock` |
-| **R9 Test 走查双到达** | `walkthrough_env=test` 的 feature-sprint 关闭前，Boss signoff commit 必须同时抵达 `develop` 与 `test` | `sprint_gate.py sprint-close` 读取 `boss-signoff.yml` 的 `commit_sha` 并校验 `git merge-base --is-ancestor` |
+| **R9 Test 走查双到达** | `walkthrough_env=test` 的 feature-sprint 合并完成前，Boss signoff commit 必须同时抵达 `develop` 与 `test` | `sprint_gate.py pr --phase review` 读取 `boss-signoff.yml` 的 `commit_sha` 并校验 `git merge-base --is-ancestor` |
 
 ### R1 不变性证据矩阵
 
@@ -116,7 +116,7 @@ Heartbeat 同样只认 `harness heartbeat`。Codex Scheduled Task、cron/launchd
 - 历史 GitHub Actions 工作流归档于各项目 `.github/workflows.legacy/`，不再触发。
 - **运维与 Agent 硬约束**：禁止用 GitHub UI 或 `gh pr merge` 合 PR 到 `main`；所有 main 合并必须走 GitLab MR（`main-source-gate` job 是 R5 在 GitLab 端的唯一权威校验）。
 - 如果项目暂未接入 GitLab CI，仍必须走 GitLab MR 承载审批和分支保护；此时 MR 的 required checks 必须调整为项目真实可执行的检查，或由 Agent 在 MR 描述中附上本地全量检查证据并等待人工合并。禁止把“已临时部署到 test”当作“已通过 MR 到 test”。
-- `walkthrough_env=test` 的 feature-sprint 有两条合并责任：功能交付 MR 到 `develop`，走查通过的同一 `commit_sha` MR 到 `test`。`sprint-close` 只认可 Git 分支到达，不认可手工部署痕迹。
+- `walkthrough_env=test` 的 feature-sprint 有两条合并责任：功能交付 MR 到 `develop`，走查通过的同一 `commit_sha` MR 到 `test`。`pr` Review Gate 只认可 Git 分支到达，不认可手工部署痕迹。
 
 ---
 

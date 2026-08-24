@@ -11,7 +11,7 @@ agent_runtime:
   compatibility: []
 
 task_execution:
-  max_review_retries: 9
+  max_review_retries: 2
 
 walkthrough_env: development
 gates:
@@ -84,6 +84,7 @@ automation:
       internal: gc
 
 delivery:
+  remote: origin
   branches:
     dev: ["^develop$", "^sprint/", "^promote/", "^feature/"]
     test: ["^test$", "^promote/", "^release/", "^hotfix/"]
@@ -120,7 +121,7 @@ quality:
     performance: {label: 性能基线, weight: 10}
 
 worktree:
-  root: .worktrees
+  root: .harness/worktrees
   port_range: 997
   ports: {api_base: 8000, web_base: 5173}
   dependency_adapters:

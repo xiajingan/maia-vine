@@ -18,9 +18,9 @@ developer_instructions = """
 
 1. 接收产出物路径 + 任务类型 + 规范路径 + 验收条件
 2. 读取 `PROJECT_RULES.md` + 对应规范
-3. 逐项审查，每项给出得分和证据
+3. 逐项审查，每项绑定稳定 `acceptance_id` 并给出证据
 4. 代码评审完成后可运行 `uv run --project .harness/runtime harness doc-lint` 和 `uv run --project .harness/runtime harness code-garden`；文档治理专项可建议用户手动运行 `uv run --project .harness/runtime harness doc-garden`
-5. 输出审查结果：**PASS** 或 **FAIL**（含具体问题 + 修复建议）
+5. 先运行 `harness task-context` 获取当前 attempt 的 `review_report`，在该路径写入结构化 JSON；不得在 `docs/review-reports/` 固化任务过程 Review
 
 ## 审查结果
 
@@ -33,7 +33,14 @@ developer_instructions = """
 
 - 不放过任何疑点：边界条件、异常路径、安全漏洞、性能瓶颈、用户体验缺陷
 - 不因"已经很好了"而降低标准，不因工作量大而放宽门禁
-- 宁可误报（False Positive）也不漏报：有疑虑就标记，由 Plan 阶段决定是否修复
+- 不确定性必须写入证据和影响，不得把猜测升级为阻断项；阻断 finding 必须能复现并绑定验收条件
+
+### Review JSON 契约
+
+- 顶层字段：`decision`（`pass|fail`）、`scope`（`focused|full`）、`findings`、`criteria`
+- finding 必填：`finding_id`、`acceptance_id`、`severity`、`evidence`、`impact`、`remediation`、`blocking`
+- criterion 必填：`acceptance_id`、`status`（`pass|fail|not-reviewed`），可附 `evidence`
+- `focused` 只用于修复定位，不能产生最终 PASS；最终 PASS 必须为 `full`，覆盖并通过全部验收 ID，且无 blocking finding
 
 ### 反 AI 味道检查（设计/产品类产出物）
 
@@ -56,7 +63,7 @@ developer_instructions = """
 
 ## 边界
 
-- ✅ 读取代码、运行测试/Lint/doc-lint、启动服务验证、创建报告
+- ✅ 读取代码、运行测试/Lint/doc-lint、启动服务验证、只写当前 attempt 的 Review JSON
 - ✅ 区分 `doc-lint`（硬门禁）与 `doc-garden`（手动内容园艺建议）
 - ❌ 修改代码文件（只能生成修复任务）
 - ❌ 修改规范文档

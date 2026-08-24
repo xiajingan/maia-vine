@@ -66,11 +66,17 @@ def _context(
         "git_sha": _git_sha(root),
         "task_id": task_id,
         "task_type": task_type,
+        "acceptance_sha256": _digest_json(acceptance_records(task, task_type)),
     }
 
 
 def _state(root: Path, sprint_path: Path, task_id: str) -> tuple[StateStore, str]:
     return StateStore(root / ".harness/state/tasks"), _safe_name(sprint_path.stem, task_id)
+
+
+def _run_dir(root: Path, sprint_path: Path, task_id: str, attempt: int) -> Path:
+    safe_task = _safe_name("run", task_id).removeprefix("task-run--").removesuffix(".json")
+    return root / ".harness/runs" / sprint_path.stem / safe_task / f"attempt-{attempt}"
 
 
 def _declared_output_paths(task: dict[str, Any]) -> tuple[list[Path], Path | None]:
@@ -95,10 +101,29 @@ def _declared_output_paths(task: dict[str, Any]) -> tuple[list[Path], Path | Non
     return roots, index_path
 
 
-def effective_acceptance(task: dict[str, Any]) -> list[Any]:
-    """Resolve common plus current-stack acceptance from the executable config."""
+def acceptance_records(task: dict[str, Any], task_type: str = "task") -> list[dict[str, str]]:
+    """Resolve stable criterion IDs from explicit records or legacy string rules."""
     stack = load_harness_config()["project"]["stack"]
-    return [*(task.get("acceptance") or []), *((task.get("acceptance_by_stack") or {}).get(stack) or [])]
+    raw = [*(task.get("acceptance") or []), *((task.get("acceptance_by_stack") or {}).get(stack) or [])]
+    records: list[dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str):
+            records.append({"id": item["id"], "text": item["text"]})
+            continue
+        if not isinstance(item, str) or not item:
+            raise ValueError(f"{task_type} acceptance 必须是非空字符串或 id/text 对象")
+        criterion = item if all(char.islower() or char.isdigit() or char in ".-" for char in item) else ""
+        if not criterion:
+            criterion = f"{task_type}.criterion-{_digest_bytes(item.encode())[:12]}"
+        records.append({"id": criterion, "text": item})
+    if len({item["id"] for item in records}) != len(records):
+        raise ValueError(f"{task_type} acceptance ID 重复")
+    return records
+
+
+def effective_acceptance(task: dict[str, Any]) -> list[dict[str, str]]:
+    """Compatibility wrapper used by evidence digests."""
+    return acceptance_records(task)
 
 
 def ensure_attempt(
@@ -120,10 +145,16 @@ def ensure_attempt(
         # A repeated failed Preflight may reuse the same pending record, but a
         # previously executable attempt can never survive a new Preflight run.
         if new_attempt or current.get("context") != expected or current.get("status") != "pending":
+            if current.get("attempt"):
+                archive = _run_dir(root, sprint_path, task_id, int(current["attempt"]))
+                StateStore(archive).write_json("attempt.json", current)
+            attempt = int(current.get("attempt", 0)) + 1
+            run_dir = _run_dir(root, sprint_path, task_id, attempt)
+            run_dir.mkdir(parents=True, exist_ok=True)
             return {
-                "schema_version": 2,
+                "schema_version": 3,
                 "run_id": uuid.uuid4().hex,
-                "attempt": int(current.get("attempt", 0)) + 1,
+                "attempt": attempt,
                 "sprint": sprint_path.stem,
                 "task_id": task_id,
                 "task_type": task_type,
@@ -131,6 +162,9 @@ def ensure_attempt(
                 "context": expected,
                 "phases": {},
                 "review": None,
+                "run_dir": run_dir.relative_to(root).as_posix(),
+                "plan": (run_dir / "plan.md").relative_to(root).as_posix(),
+                "review_report": (run_dir / "review.json").relative_to(root).as_posix(),
                 "created_at": datetime.now(UTC).isoformat(),
             }
         return current
@@ -143,7 +177,7 @@ def load_current_attempt(
 ) -> dict[str, Any]:
     store, name = _state(root, sprint_path, task_id)
     state = store.read_json(name, {})
-    if not isinstance(state, dict) or state.get("schema_version") != 2:
+    if not isinstance(state, dict) or state.get("schema_version") != 3:
         raise ValueError("任务执行轮次不存在；先运行 preflight gate")
     if state.get("context") != _context(root, sprint_path, rules_path, task_id, task_type, task):
         raise ValueError("任务输入已变化；必须重新运行 preflight gate 创建新轮次")
@@ -234,7 +268,7 @@ def validate_failed_action_evidence(
         state = store.read_json(name, {})
     except (OSError, ValueError) as exc:
         return [f"上游失败 Action 证据损坏: {task_id} ({exc})"]
-    if not isinstance(state, dict) or state.get("schema_version") != 2 or state.get("status") != "ready":
+    if not isinstance(state, dict) or state.get("schema_version") != 3 or state.get("status") != "ready":
         return [f"上游失败 Action 证据不存在: {task_id} ({task_type})"]
     context = state.get("context", {}) if isinstance(state, dict) else {}
     if not isinstance(context, dict):
@@ -282,6 +316,14 @@ def record_review(
     report = report_path.resolve()
     if not report.is_file() or not report.is_relative_to(root.resolve()):
         raise ValueError("Review report 必须是工程内已存在文件")
+    expected_report = root / state["review_report"]
+    if report != expected_report.resolve():
+        raise ValueError(f"Review report 必须写入当前 attempt: {expected_report}")
+    try:
+        review_document = json.loads(report.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise ValueError(f"Review report 必须是合法 JSON: {exc}") from exc
+    _validate_review_document(review_document, decision, acceptance_records(task, task_type))
     if decision == "pass" and not artifacts:
         raise ValueError("Review 至少需要一个实际产物 --artifact")
     artifact_records = []
@@ -331,7 +373,8 @@ def record_review(
             "decision": decision,
             "report": report.relative_to(root.resolve()).as_posix(),
             "report_sha256": _digest_bytes(report.read_bytes()),
-            "acceptance_sha256": _digest_json(effective_acceptance(task)),
+            "acceptance_sha256": _digest_json(acceptance_records(task, task_type)),
+            "scope": review_document["scope"],
             "artifacts": artifact_records,
             "recorded_at": datetime.now(UTC).isoformat(),
         }
@@ -369,7 +412,7 @@ def validate_attempt(
         errors.append("缺少当前轮次 harness-review PASS 证据")
     elif not report.is_file() or _digest_bytes(report.read_bytes()) != review.get("report_sha256"):
         errors.append("Review report 缺失或已变化")
-    elif review.get("acceptance_sha256") != _digest_json(effective_acceptance(task)):
+    elif review.get("acceptance_sha256") != _digest_json(acceptance_records(task, task_type)):
         errors.append("Review 验收条件与当前规则不一致")
     for artifact in review.get("artifacts") or []:
         path = root / str(artifact.get("path", ""))
@@ -378,3 +421,53 @@ def validate_attempt(
     if not review.get("artifacts"):
         errors.append("Review 未绑定实际产物")
     return errors
+
+
+def _validate_review_document(document: Any, decision: str, acceptance: list[dict[str, str]]) -> None:
+    if not isinstance(document, dict):
+        raise ValueError("Review report 顶层必须是对象")
+    if document.get("decision") != decision:
+        raise ValueError("Review report decision 与命令参数不一致")
+    scope = document.get("scope")
+    if scope not in {"focused", "full"}:
+        raise ValueError("Review report scope 必须是 focused 或 full")
+    if decision == "pass" and scope != "full":
+        raise ValueError("focused Review 不能产生最终 PASS")
+    findings = document.get("findings")
+    criteria = document.get("criteria")
+    if not isinstance(findings, list) or not isinstance(criteria, list):
+        raise ValueError("Review report 必须包含 findings 与 criteria 数组")
+    acceptance_ids = {item["id"] for item in acceptance}
+    seen: set[str] = set()
+    for item in criteria:
+        if not isinstance(item, dict) or item.get("acceptance_id") not in acceptance_ids:
+            raise ValueError("Review criteria 引用了未知 acceptance_id")
+        if item.get("status") not in {"pass", "fail", "not-reviewed"}:
+            raise ValueError("Review criteria.status 非法")
+        if item["acceptance_id"] in seen:
+            raise ValueError("Review criteria.acceptance_id 重复")
+        if item["status"] != "not-reviewed" and not str(item.get("evidence", "")).strip():
+            raise ValueError("Review criteria 通过或失败时必须提供 evidence")
+        seen.add(item["acceptance_id"])
+    if decision == "pass" and (seen != acceptance_ids or any(item.get("status") != "pass" for item in criteria)):
+        raise ValueError("PASS Review 必须完整覆盖且通过全部验收条件")
+    finding_ids: set[str] = set()
+    for item in findings:
+        required = {"finding_id", "acceptance_id", "severity", "evidence", "impact", "remediation", "blocking"}
+        if not isinstance(item, dict) or not required <= set(item):
+            raise ValueError("Review finding 缺少结构化必填字段")
+        if item["acceptance_id"] not in acceptance_ids:
+            raise ValueError("Review finding 引用了未知 acceptance_id")
+        if item["severity"] not in {"critical", "major", "minor", "suggestion"}:
+            raise ValueError("Review finding severity 非法")
+        if type(item["blocking"]) is not bool:
+            raise ValueError("Review finding blocking 必须是布尔值")
+        if any(not str(item[field]).strip() for field in ("finding_id", "evidence", "impact", "remediation")):
+            raise ValueError("Review finding 文本字段必须非空")
+        if item["finding_id"] in finding_ids:
+            raise ValueError("Review finding_id 重复")
+        finding_ids.add(item["finding_id"])
+    if decision == "pass" and any(item.get("blocking") for item in findings):
+        raise ValueError("PASS Review 不得包含 blocking finding")
+    if decision == "fail" and not any(item.get("blocking") for item in findings):
+        raise ValueError("FAIL Review 必须包含至少一个 blocking finding")

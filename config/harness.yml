@@ -42,12 +42,15 @@ deploy:
   test_mode: docker
   prod_mode: docker
 commands:
+  doc_lint: ["{harness}", doc-lint]
   lint: []
   format_check: []
   typecheck: []
   architecture: []
   unit: []
   integration: []
+command_groups:
+  precommit: [doc_lint]
 management:
   control_id: maia
   control_path: ..

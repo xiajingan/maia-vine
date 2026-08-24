@@ -14,7 +14,7 @@
 
 ## Sprint 启动协议
 
-Sprint 计划确认后，**第一个任务的 Step 0 自然触发环境验证**；编排者不单独再跑一遍 preflight。
+先执行 `harness sprint init sprint-N-name --type <feature-sprint|maintenance|hotfix|deploy-sprint-test|deploy-sprint-prod|control>`。Runtime 从 `delivery.remote/refs` 解析并刷新远端基线；Feature、Maintenance、Hotfix 同时创建 linked worktree，禁止回退到当前 HEAD 或主工作区。计划确认后执行 `harness sprint activate <plan>`，再由第一个任务的 Step 0 触发环境验证。
 
 ### 启动检查
 
@@ -40,7 +40,7 @@ Sprint 计划确认后，**第一个任务的 Step 0 自然触发环境验证**�
 
 ## Agent 架构
 
-Sprint 编排者由主 Agent 在前台承担；只通过 `task` 工具启动后三步子 Agent：
+Sprint 编排者由主 Agent 在前台承担；只在当前任务协议需要时通过 `task` 工具启动子 Agent：
 
 Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copilot 是分发兼容层。进入 Sprint 即授权按本协议顺序派生三角色，但不授权无关并行任务。普通单点任务不进入本协议。
 
@@ -57,17 +57,18 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 ## 任务执行协议
 
-每个任务经历四步，由 Sprint 主 Agent 编排，后三步各由独立子 Agent 执行：
+每个任务都经过 Preflight 与 Review Gate；中间执行链由 `task-context` 返回的唯一协议决定：
 
 ```
 主 Agent / Sprint 编排者（前台）
   └─ 逐任务执行：
      ├─ Step 0: PRE-FLIGHT       ← 主 Agent 自行执行
-     ├─ Step 1: PLAN             → 启动子 Agent (agent_type: harness-plan)
-     ├─ Step 2: EXEC             → 启动子 Agent (agent_type: harness-exec)
-     └─ Step 3: REVIEW           → 启动子 Agent (agent_type: harness-review)
+     ├─ agent: PLAN → EXEC       → harness-plan → harness-exec
+     ├─ action: EXEC             → task-action（不派生 Plan/Exec Agent）
+     ├─ orchestrator: EXEC       → 前台按规则 steps 执行
+     └─ REVIEW                   → agent-full 派生 harness-review；artifact-only 使用确定性证据
          ├─ PASS → 执行 `sprint-gate ... --task-id <task-id> --phase review --strict` → 提交修改
-         └─ FAIL → 回到 Step 1 重新规划（默认最多重试 9 次）
+         └─ FAIL → 回到 Step 1 重新规划（默认最多重试 2 次）
 ```
 
 ### Step 0: PRE-FLIGHT（编排者自行执行）
@@ -82,24 +83,27 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 ### Step 1: PLAN → 启动子 Agent (agent_type: harness-plan)
 
+仅适用于 `execution_protocol=agent`；Action 和 orchestrator 任务跳过本步骤。
+
 子 Agent **自主完成**以下工作（编排者不代劳）：
 
 1. 从 `.harness/rules/task-rules.yml` 获取任务类型对应的规范路径，**加载规范原文**
 2. 加载上游产出物（PRD/设计/技术方案）作为上下文
 3. 执行 Readback（输出执行步骤和评分标准原文摘录），Readback 与规范不一致则禁止继续
 4. 生成详细执行计划（修改哪些文件、实现方式、验收标准）
+5. 执行计划只写入 `harness task-context` 返回的 `.harness/runs/.../plan.md`；`docs/exec-plans/` 只保存 Sprint 级计划
 
 ### Step 2: EXEC → 启动子 Agent (agent_type: harness-exec)
 
-子 Agent 接收 Step 1 的执行计划全文，**自主决定实现细节**，按计划执行，只用任务类型允许的工具。
+`agent` 任务由子 Agent 接收计划全文并实施；`action` 任务只运行声明的 `task-action`；`orchestrator` 任务由前台执行规则 steps。三者互斥。
 
 ### Step 3: REVIEW → 启动子 Agent (agent_type: harness-review)
 
-子 Agent **自主**接收产出物 + 规范验收条件，逐项审查：
-- **PASS** → 保存 Review 报告，通过 `task-review` 写入当前轮次结构化证据，再执行 Review Gate；通过后更新任务状态为 `done`
-- **FAIL** → 生成具体问题 + 修复建议 → 回到 Step 1 由 harness-plan 重新规划
+`agent-full` 派生子 Agent 审查产出物；`artifact-only` 由前台根据确定性 Action/Gate 证据填充同一 JSON 契约，不派生子 Agent：
+- **PASS** → 将 `scope=full` 的 Review JSON 写入 `task-context.review_report`；完整覆盖并通过全部稳定验收 ID 后，才可通过 `task-review` 登记并执行 Review Gate
+- **FAIL** → 生成具体问题 + 修复建议 → 创建新 attempt，并按该任务原执行协议重试
 
-**REVIEW 范围**：每次 REVIEW 都按任务原始验收条件对全部产出物做完整审查。重试轮次中，REVIEW 范围不收窄为"仅验证修复项"。
+`focused` Review 只能用于定位修复项，不能产生最终 PASS。阻断 finding 必须包含验收 ID、严重级别、可复现证据、影响和修复建议；猜测不得作为 blocking finding。
 
 ### 产出物模板约束
 
@@ -117,9 +121,9 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 | 子 Agent | 编排者传递 | 编排者禁止 |
 |----------|-----------|-----------|
-| harness-plan | 任务 ID + 类型 + Sprint 计划路径 + 上游产出物路径列表 | ❌ 预写执行计划内容 |
+| harness-plan | 任务 ID + 类型 + Sprint 计划路径 + 上游产出物路径列表 + task-context.plan | ❌ 预写执行计划内容 |
 | harness-exec | Step 1 生成的执行计划**原文** | ❌ 预写代码/文档内容、补充额外实现指令 |
-| harness-review | Step 2 产出物路径 + 任务类型对应的规范路径 + 验收条件 | ❌ 预判审查结论 |
+| harness-review | Step 2 产出物路径 + 规范 + 稳定验收 ID + task-context.review_report | ❌ 预判审查结论 |
 
 ### 调度约束
 
@@ -127,12 +131,12 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 2. **原文传递**：Step 1 → Step 2 传递执行计划原文，编排者不得改写或补充
 3. **独立执行**：每个子 Agent 自主加载所需规范文件，编排者不代为加载后粘贴
 4. **顺序阻塞**：Step 1 完成后才启动 Step 2，Step 2 完成后才启动 Step 3
-5. **失败重试**：Step 3 FAIL 时，将 Review 反馈传递给 Step 1 重新规划；上限读取 `config/harness.yml#task_execution.max_review_retries`（默认 9 次，不含初始轮次）
+5. **失败重试**：Step 3 FAIL 时，将 Review 反馈传递给 Step 1 重新规划；上限读取 `config/harness.yml#task_execution.max_review_retries`（默认 2 次，不含初始轮次，最大允许配置为 5）
 6. **轮次隔离**：FAIL 后使用 `sprint-gate ... --new-attempt --increment-retry` 创建新轮次；旧轮次 Action/Review 证据不得复用
 
 ### FAIL 重试协议
 
-REVIEW FAIL 时，任务进入重试循环（默认最多重试 9 次，不含初始轮次），始终走完整 Step 1 → Step 2 → Step 3：
+REVIEW FAIL 时，任务进入重试循环（默认最多重试 2 次，不含初始轮次），始终重新执行该任务完整的既定协议和 Review Gate。remediation 任务与父任务共享重试预算；人工重置必须提供 `--reset-retry-reason`：
 
 1. **Step 1 PLAN**：传入 Review 反馈原文 + 原执行计划路径，harness-plan 自主生成修复计划
 2. **Step 2 EXEC**：harness-exec 按修复计划执行
@@ -155,20 +159,18 @@ REVIEW FAIL 时，任务进入重试循环（默认最多重试 9 次，不含�
 
 **状态**：`planning` → `active` → `completed`
 
-**流程**：读取 USER_STORIES.md → 创建 `exec-plans/active/sprint-N-name.md` → 按依赖逐任务执行 → 完成校验通过 → 移至 `completed/`
+**流程**：`harness sprint init` → 确认计划 → `harness sprint activate` → 按依赖执行 → `sprint-close` 将计划归档到 `completed/` → `pr` 合并并安全清理 worktree
 
 **任务状态**：`pending` | `in-progress` | `done` | `blocked` | `spawned`
 
 **Sprint 闭环协议**（L3 走查通过后，编排者依序执行）：
 
-1. 走查问题记录至 `docs/exec-plans/tech-debt-tracker.md`（若有偏差）
-2. 合并 PR（sprint 分支 → develop）— 属于 `pr` 任务
-3. 销毁 worktree：`uv run --project .harness/runtime harness worktree destroy sprint-N-name`
-4. 归档计划：`exec-plans/active/sprint-N-*.md` → `exec-plans/completed/`
-5. 更新 `AGENTS.md` 当前迭代指针
-6. 更新 `USER_STORIES.md` 中已交付 Story 状态
+1. `sprint-close` 在 sprint 分支中归档计划：`docs/exec-plans/active/` → `docs/exec-plans/completed/`，并更新 `AGENTS.md`、`USER_STORIES.md` 和偏差记录
+2. `pr` 把上述归档与交付物一起合入目标远端分支；禁止先合并、后在已删除 worktree 中寻找计划
+3. 明确确认合并后，从主工作区执行 `harness worktree destroy <sprint-id> --merged-into <remote-ref>`；dirty、未合并或无法验证时拒绝删除
+4. 只有人工恢复场景可使用 `harness worktree recover-destroy <sprint-id>`，该命令会明确报告强制删除目标
 
-> 步骤 1-2 由 `pr` 任务负责（L3 通过后合入）；步骤 3-6 由 `sprint-close` 任务负责（环境清理与归档）。
+> 归档先于合并，清理后于合并，这是保证 completed 计划进入目标分支且 worktree 可恢复的固定顺序。
 
 **迭代完成校验**（闭环前逐项确认）：
 1. 全部任务状态为 `done`（无 `pending`/`blocked`/`in-progress`）
@@ -197,10 +199,10 @@ Feature Sprint 是 PR 级交付单元，默认创建 worktree。含 `code` 的 S
 
 | `config/harness.yml.walkthrough_env` | 任务流 |
 |---|---|
-| `development` | `product/design/tech` → `code` → `test-case-gen` → `quality` → `product-acceptance(L3)` → `pr` → `sprint-close` |
-| `test` | `product/design/tech` → `code` → `test-case-gen` → `promote-prep` → `build-image` → `promote-test` → `quality` → `product-acceptance(L3)` → `pr(develop + test)` → `sprint-close` |
+| `development` | `product/design/tech` → `code` → `test-case-gen` → `quality` → `product-acceptance(L3)` → `sprint-close` → `pr` |
+| `test` | `product/design/tech` → `code` → `test-case-gen` → `promote-prep` → `build-image` → `promote-test` → `quality` → `product-acceptance(L3)` → `sprint-close` → `pr(develop + test)` |
 
-`test` 模式表示质量评分和产品走查必须基于 Test 环境；因此 `promote-prep`、`build-image`、`promote-test` 必须在 `quality` 前通过。Boss 走查通过后，`pr` 任务必须同时完成两条 MR：Sprint 分支 → `develop`，已走查提交 → `test`。`sprint-close` 在 `walkthrough_env=test` 时由 `sprint_gate.py` 强制校验 Boss signoff 中的 `commit_sha` 已同时抵达 `origin/develop` 与 `origin/test`；未抵达时禁止关闭。`development` 模式若另行要求测试发布，不插入 feature-sprint 主链，改为 Sprint 关闭后启动独立 deploy-sprint。
+`test` 模式表示质量评分和产品走查必须基于 Test 环境；因此 `promote-prep`、`build-image`、`promote-test` 必须在 `quality` 前通过。Boss 走查通过并完成 `sprint-close` 归档后，`pr` 任务必须完成两条 MR：Sprint 分支 → `develop`，已走查 commit_sha → `test`。`pr` Review Gate 强制校验该 SHA 已同时抵达两个远端 ref；未抵达时禁止清理 worktree。
 
 ### Deploy Sprint
 
@@ -239,19 +241,21 @@ Hotfix 是线上事故专项 Sprint，允许创建 hotfix worktree，但仍复�
 | `artifact_action` | Python Action Registry 中的产物门禁 | Step 3 REVIEW / 闭环 |
 | `manual_steps` | 需用户手工完成的步骤 | Step 2 EXEC |
 
-`entry_action` / `execute.action` 统一通过 `uv run --project .harness/runtime harness task-action <task-type> --task-id <task-id> entry|execute --sprint <sprint-path> [--value key=value]` 执行并写入当前 attempt 证据。独立 Review 后必须执行 `harness task-review <task-type> --task-id <task-id> <sprint-path> --report <path> --decision pass|fail --artifact <actual-output-file> [--artifact <file> ...]`。`artifact_action` 只由 Review Gate 执行；旧 attempt、输入摘要变化、Action 失败、Review 非 PASS、报告或产物漂移均为硬阻断。
+Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 和 `review_protocol=agent-full|artifact-only`，并由 `harness task-context` 输出；规则可显式覆盖，但不得由 Agent 临时选择第二条执行链。`entry_action` / `execute.action` 统一通过 `task-action` 执行并写入当前 attempt 证据。独立 Review 后必须执行 `task-review`；`artifact_action` 只由 Review Gate 执行。旧 attempt、输入摘要变化、Action 失败、Review 非 PASS、报告或产物漂移均为硬阻断。
+
+验收项可显式写为 `{id, text}`；兼容字符串由 Runtime 生成确定性 ID，并通过 `task-context.acceptance` 暴露，Agent 不得自行编造或按数组序号引用。
 
 ---
 
 ## Sprint 计划文档
 
-文件路径：`exec-plans/active/sprint-N-name.md`
+文件路径：`docs/exec-plans/active/sprint-N-name.md`；完成后移动到同名 `completed/`。任务级 Plan/Review 不属于知识库，只能进入 `.harness/runs/`。
 
-**头部字段**：目标（一句话）、状态、验收标准、依赖、关联 User Story
+**生命周期必填字段**：`sprint_type`、远端 `base_ref`、不可变 `base_sha`、`branch`；另含目标、状态、验收标准、依赖、关联 User Story
 
 部署类 Sprint 额外声明 `source_sprints: [sprint-N-name, ...]`，用于绑定已批准的来源 Sprint、signoff 与提交；不得以接受报告目录非空代替。
 
-**任务表列**：`| ID | 类型 | 任务描述 | 依赖 | 产出物 | 验收条件 | 状态 |`
+**任务表列**：`| ID | 类型 | 来源 | 父任务 | 任务描述 | 依赖 | 产出物 | 验收条件 | 状态 |`。激活后新增任务只能经 `harness sprint amend --reason`，且来源为 `scope-split|remediation`、父任务必须已存在。
 
 **规则**：含 `code` 须包含 Phase 5-11（含 `product-acceptance` L3 走查）、任务依赖列含上游产出物路径、前端 `code` 依赖对应后端 `code`
 
@@ -279,7 +283,7 @@ Hotfix 是线上事故专项 Sprint，允许创建 hotfix worktree，但仍复�
 2. **Review PASS 后**：输出走查摘要 + 走查指南路径，供 Boss 按指南操作
 3. **使用 `ask_user` 工具阻塞等待**用户明确确认（`通过`/`approved`/`继续`）
 4. **固化审批记录**：收到确认后执行 `uv run --project .harness/runtime harness acceptance-record approve <sprint-id>`；未通过则执行 `reject`
-5. Boss 确认后方可继续 `pr`，PR 合并后再进入 `sprint-close`
+5. Boss 确认后先执行 `sprint-close` 归档，再由 `pr` 合并归档和交付物并安全清理 worktree
 
 | 门控 | 触发时机 | 必要产出物 | 阻塞方式 |
 |------|---------|-----------|---------|
@@ -330,7 +334,7 @@ Hotfix 是线上事故专项 Sprint，允许创建 hotfix worktree，但仍复�
 
 | 类型 | 触发 | 任务集 | worktree | 备注 |
 |------|------|--------|---------|------|
-| feature-sprint | 默认 | infra→…→code→test-case-gen→quality→product-acceptance→pr→sprint-close | 是 | `walkthrough_env=test` 时在 quality 前插入 promote-prep/build-image/promote-test |
+| feature-sprint | 默认 | infra→…→code→test-case-gen→quality→product-acceptance→sprint-close→pr | 是 | `walkthrough_env=test` 时在 quality 前插入 promote-prep/build-image/promote-test |
 | deploy-sprint(test) | 项目要求测试发布 | promote-prep→build-image→promote-test→integration | 否 | 不开新分支，操作 `release-staging/<train>` |
 | deploy-sprint(prod) | 项目要求生产发布 | …→release-prep→migration-design+regression→release-approval(L3)→prod-deploy→back-merge→observe | 否 | 含强制 L3 |
 | hotfix | 线上故障 | hotfix-init→code→quality→prod-deploy→back-merge | 是 | 跳过 deploy-sprint 编排 |
@@ -338,7 +342,7 @@ Hotfix 是线上事故专项 Sprint，允许创建 hotfix worktree，但仍复�
 ### 编排者职责（取代独立 release Agent）
 
 1. **判定 Sprint 类型**：根据用户指令 + `config/harness.yml.walkthrough_env` 决定流程
-2. **deploy-sprint 启动**：feature-sprint sprint-close 通过后，按需启动 deploy-sprint（与 feature 互斥串行）
+2. **deploy-sprint 启动**：feature-sprint `pr` 完成合并与安全清理后，按需启动 deploy-sprint（与 feature 互斥串行）
 3. **配置门禁**：promote-prep 必须先通过；`.harness/state/promote-prep-<env>.json ready=true` 才能 build-image
 
 ### 关键状态文件

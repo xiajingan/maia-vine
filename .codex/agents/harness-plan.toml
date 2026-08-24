@@ -20,6 +20,7 @@ developer_instructions = """
    - 需要修改/创建的文件列表
    - 每个文件的具体修改内容
    - 验收标准（来自规范，不可自定义）
+6. 先运行 `harness task-context <task-type> --task-id <task-id> --sprint <sprint-path>` 获取当前 attempt 的 `plan` 路径，并只把计划写入该路径。禁止在 `docs/exec-plans/` 创建任务级 Plan。
 
 ## 接收 Review 反馈
 
@@ -37,7 +38,7 @@ developer_instructions = """
 ## 边界
 
 - ✅ 读取规范文档、Sprint 计划、上游产出物
-- ✅ 生成执行计划文档
+- ✅ 在 `.harness/runs/<sprint>/<task>/attempt-N/plan.md` 生成过程计划
 - ❌ 执行代码修改、运行命令
 - ❌ 修改规范文档
 - ❌ 做 Sprint 级别规划（那是 harness-sprint 的职责）

@@ -68,6 +68,27 @@ def strings(value: Any, path: str = "") -> list[tuple[str, str]]:
     return []
 
 
+def validate_acceptance(items: Any, path: str, error, warning) -> list[str]:
+    if not isinstance(items, list) or not items:
+        error(f"{path} 必须是非空数组")
+        return []
+    identifiers: list[str] = []
+    for index, item in enumerate(items):
+        if isinstance(item, str) and item:
+            identifiers.append(item if re.fullmatch(r"[a-z0-9][a-z0-9.-]*", item) else f"legacy:{item}")
+        elif isinstance(item, dict) and set(item) == {"id", "text"}:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(item.get("id", ""))):
+                error(f"{path}[{index}].id 非法")
+            if not isinstance(item.get("text"), str) or not item["text"]:
+                error(f"{path}[{index}].text 必须是非空字符串")
+            identifiers.append(str(item.get("id", "")))
+        else:
+            error(f"{path}[{index}] 必须是字符串或仅含 id/text 的对象")
+    if len(identifiers) != len(set(identifiers)):
+        error(f"{path} acceptance ID 重复")
+    return identifiers
+
+
 def validate(doc: Any, root: Path) -> Validation:
     result = Validation()
     error, warning = result.errors.append, result.warnings.append
@@ -151,6 +172,21 @@ def validate(doc: Any, root: Path) -> Validation:
             unknown = set(sprint_types or []) - expected_sprint_types if isinstance(sprint_types, list) else set()
             if not isinstance(sprint_types, list) or unknown:
                 error(f"sprint_type_mode_capabilities.{mode} 含非法类型: {sorted(unknown)}")
+    policies = doc.get("sprint_type_policies")
+    if not isinstance(policies, dict) or set(policies) != expected_sprint_types:
+        error(f"sprint_type_policies 必须完整声明: {sorted(expected_sprint_types)}")
+    else:
+        for sprint_type, policy in policies.items():
+            if not isinstance(policy, dict) or set(policy) != {"worktree", "base", "branch_prefix"}:
+                error(f"sprint_type_policies.{sprint_type} 必须声明 worktree/base/branch_prefix")
+                continue
+            if policy.get("worktree") not in {"required", "forbidden"}:
+                error(f"sprint_type_policies.{sprint_type}.worktree 非法")
+            if policy.get("base") not in {"development", "test", "production"}:
+                error(f"sprint_type_policies.{sprint_type}.base 非法")
+            prefix = policy.get("branch_prefix")
+            if not isinstance(prefix, str) or (policy.get("worktree") == "required" and not prefix.endswith("/")):
+                error(f"sprint_type_policies.{sprint_type}.branch_prefix 非法")
     layout_path = (
         root / "config/distribution-layout.yml"
         if (root / "config/distribution-layout.yml").exists()
@@ -228,19 +264,25 @@ def validate(doc: Any, root: Path) -> Validation:
         derived_modes = {mode for mode, names in mode_matrix.items() if name in names}
         if declared_modes is not None and set(declared_modes) != derived_modes:
             error(f"tasks.{name}.allowed_modes 与 mode_task_capabilities 不一致")
+        common_acceptance = validate_acceptance(task.get("acceptance"), f"tasks.{name}.acceptance", error, warning)
+        if task.get("execution_protocol") not in {None, "agent", "action", "orchestrator"}:
+            error(f"tasks.{name}.execution_protocol 非法")
+        if task.get("review_protocol") not in {None, "agent-full", "artifact-only"}:
+            error(f"tasks.{name}.review_protocol 非法")
         acceptance_by_stack = task.get("acceptance_by_stack")
         if acceptance_by_stack is not None:
             if not isinstance(acceptance_by_stack, dict) or not set(acceptance_by_stack) <= KNOWN_STACKS:
                 error(f"tasks.{name}.acceptance_by_stack 只能声明已知 stack")
-            elif any(not isinstance(items, list) or not items for items in acceptance_by_stack.values()):
-                error(f"tasks.{name}.acceptance_by_stack 每个 stack 必须是非空数组")
+            else:
+                for stack, items in acceptance_by_stack.items():
+                    stack_ids = validate_acceptance(items, f"tasks.{name}.acceptance_by_stack.{stack}", error, warning)
+                    if set(common_acceptance) & set(stack_ids):
+                        error(f"tasks.{name}.acceptance 与 {stack} acceptance ID 重复")
         tools = task.get("tools")
         if isinstance(tools, dict):
             for key in ("allow", "deny"):
                 if not isinstance(tools.get(key), list):
                     error(f"tasks.{name}.tools.{key} 必须是数组")
-        if "acceptance" in task and not isinstance(task["acceptance"], list):
-            error(f"tasks.{name}.acceptance 必须是数组")
         for legacy in ("infra_ready", "entry_command", "artifact_guard"):
             if legacy in task:
                 error(f"tasks.{name}.{legacy} 已废弃，必须使用 Action Registry 字段")

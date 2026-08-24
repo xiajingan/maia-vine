@@ -33,17 +33,27 @@ sprint_type_task_capabilities:
 
 # 流程顺序真源。任务必须按阶段递增；同一阶段可并行或按条件选择，未列入当前 Sprint 的可选任务不构成前置。
 sprint_type_sequences:
-  feature-sprint: [{tasks: [infra]}, {tasks: [product]}, {tasks: [design]}, {tasks: [backend-design, frontend-design], require: all}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [pr]}, {tasks: [sprint-close]}]
+  feature-sprint: [{tasks: [infra]}, {tasks: [product]}, {tasks: [design]}, {tasks: [backend-design, frontend-design], require: all}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close]}, {tasks: [pr]}]
   deploy-sprint-test: [{tasks: [promote-prep]}, {tasks: [build-image]}, {tasks: [promote-test]}, {tasks: [integration]}]
   deploy-sprint-prod: [{tasks: [release-prep]}, {tasks: [migration-design, regression], require: all}, {tasks: [release-approval]}, {tasks: [prod-deploy]}, {tasks: [back-merge]}, {tasks: [observe]}]
   hotfix: [{tasks: [hotfix-init]}, {tasks: [code]}, {tasks: [quality]}, {tasks: [prod-deploy]}, {tasks: [back-merge]}, {tasks: [observe]}]
   control: [{tasks: [managed-project-check]}, {tasks: [assignment-dispatch]}, {tasks: [assignment-status]}, {tasks: [delivery-verify]}, {tasks: [release-compose]}, {tasks: [test-deploy]}, {tasks: [test-integration]}, {tasks: [integration-finding, release-promote], require: any}, {tasks: [release-rollback]}]
-  maintenance: [{tasks: [infra]}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [pr]}, {tasks: [sprint-close]}]
+  maintenance: [{tasks: [infra]}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close]}, {tasks: [pr]}]
 
 sprint_type_mode_capabilities:
   standalone: [feature-sprint, deploy-sprint-test, deploy-sprint-prod, hotfix, maintenance]
   managed: [feature-sprint, maintenance]
   control: [control]
+
+# Sprint 生命周期策略真源。Runtime 根据该策略和 Git 实际状态创建、检查工作区；
+# Feature/Maintenance/Hotfix 不允许退回当前 HEAD 或主工作区执行。
+sprint_type_policies:
+  feature-sprint: {worktree: required, base: development, branch_prefix: "sprint/"}
+  maintenance: {worktree: required, base: development, branch_prefix: "sprint/"}
+  hotfix: {worktree: required, base: production, branch_prefix: "hotfix/"}
+  deploy-sprint-test: {worktree: forbidden, base: development, branch_prefix: ""}
+  deploy-sprint-prod: {worktree: forbidden, base: test, branch_prefix: ""}
+  control: {worktree: forbidden, base: development, branch_prefix: ""}
 
 # ─── 任务类型规则 ───────────────────────────────────────────────
 
@@ -293,7 +303,7 @@ tasks:
       artifacts: ["测试报告", "质量评分"]
       index: "docs/test-reports/index.md"
     acceptance:
-      - "entry_command 退出码 = 0（总分 ≥ 95）"
+      - "entry_action 退出码 = 0（总分 ≥ 95）"
       - "7 个评分维度全部执行；不适用维度按当前 stack 规则处理"
       - "报告文件为 <N-name>-quality.md（非时间戳命名；<N-name> 已含 sprint- 前缀）"
       - "Performance baseline 达标"
@@ -312,7 +322,7 @@ tasks:
       allow: [file-rw, search, bash, sub-agent]
       deny: [modify-specs, modify-code]
     # H-OPT v1.6: PR 后置至 product-acceptance 之后（GitLab CI 触发不稳定 + quality-score 已承担主校验）
-    prerequisites: ["product-acceptance L3 通过（ask_user 确认记录）"]
+    prerequisites: ["sprint-close done", "product-acceptance L3 通过（ask_user 确认记录）"]
     approval_artifact: "docs/acceptance-reports/<N-name>-boss-signoff.yml"
     artifact_action: project.acceptance.guard
     outputs:
@@ -325,6 +335,7 @@ tasks:
       - "PR 标题符合 Conventional Commits"
       - "PR 描述包含：变更摘要、关联 User Story、测试结果、截图（前端）"
       - "config/harness.yml command_groups.precommit 与项目构建命令全部通过"
+      - "合并后 sprint 分支已抵达目标远端 ref；Review Gate 通过后再从主工作区安全清理 worktree"
     acceptance_by_stack:
       python-backend: ["Ruff、Python 架构检查、pytest 与 Python 构建通过；项目配置 typecheck 时必须通过"]
       fullstack: ["Python 后端与 TypeScript 前端全量检查、构建和 Playwright 通过"]
@@ -332,7 +343,7 @@ tasks:
     manual_steps:
       - "Agent 使用 harness pr-adapter create 构造 PR/MR；GitLab push-options fallback 只能由 pr-adapter 内部封装，不得在任务中绕过适配器"
       - "缺少 GitLab CLI/CI 时，Agent 必须输出 MR URL + 本地全量检查证据，等待用户在 GitLab 手动确认"
-      - "MR 合并后用户通过 ask_user 确认"
+      - "MR 合并后用户通过 ask_user 确认；Review Gate 验证远端包含关系后，再从主工作区执行 harness worktree destroy <id> --merged-into <remote-ref>"
     post_merge:
       - "走查偏差记录至 tech-debt-tracker.md（若有）"
     note: "每个 Sprint 必须包含一个 pr 任务。Sprint = PR 级别交付单元。pr 在 product-acceptance 之后执行。"
@@ -368,31 +379,29 @@ tasks:
     blocking: "product-acceptance Review PASS 后 → 编排者使用 ask_user 阻塞等待 Boss 确认，并执行 harness acceptance-record approve|reject <N-name> 固化结果"
 
   sprint-close:
-    label: "Sprint 清理"
+    label: "Sprint 归档"
     spec: "SPRINT.md"  # 闭环协议章节
     gate: L1
     allowed_modes: [standalone, managed]
-    executor: orchestrator  # 编排者直接执行，无需 plan/exec/review 子 Agent
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
     tools:
       allow: [file-rw, search, bash]
       deny: [modify-specs, modify-code]
-    # H-OPT v1.6: 顺序变为 quality → product-acceptance(L3) → pr → sprint-close
-    prerequisites: ["product-acceptance L3 通过（ask_user 确认记录）", "PR 已合并"]
+    prerequisites: ["product-acceptance L3 通过（ask_user 确认记录）"]
     approval_artifact: "docs/acceptance-reports/<N-name>-boss-signoff.yml"
     preflight_file_checks:
       - "docs/acceptance-reports/<N-name>-acceptance.md 必须存在"
       - "docs/acceptance-reports/<N-name>-walkthrough.md 必须存在"
     artifact_action: project.acceptance.guard
     steps:
-      - "销毁 worktree：harness worktree destroy <N-name>"
-      - "归档计划：exec-plans/active/ → exec-plans/completed/"
+      - "归档计划：docs/exec-plans/active/ → docs/exec-plans/completed/"
       - "更新 AGENTS.md 当前迭代指针"
       - "更新 USER_STORIES.md 已交付 Story 状态"
     acceptance:
-      - "worktree 已销毁"
       - "计划文件在 exec-plans/completed/"
       - "AGENTS.md 迭代指针已更新"
-      - "development 模式：signoff commit_sha 已抵达 origin/develop；test 模式：signoff commit_sha 已同时抵达 origin/develop 与 origin/test"
+      - "归档与 Story 状态变更已纳入当前 sprint 分支，等待 pr 任务合并；不得先销毁 worktree"
 
   # H-OPT v1.6: release 任务删除（被 deploy-sprint 概念替代，发布作为独立 Sprint 编排）
   # 旧定义已迁出。生产部署改由 prod-deploy 任务承担（见下方）。
@@ -420,7 +429,8 @@ tasks:
     label: "部署前置检查（test|prod）"
     spec: "CICD.md / config/deploy.yml"
     gate: L1
-    executor: orchestrator
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
     tools:
       allow: [file-rw, search, bash]
       deny: [modify-specs, modify-code]
@@ -438,7 +448,8 @@ tasks:
     label: "镜像构建（部署 Sprint）"
     spec: "CICD.md / config/deploy.yml.build"
     gate: L1
-    executor: orchestrator
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
     tools:
       allow: [file-rw, search, bash]
       deny: [modify-specs, modify-code]
@@ -454,7 +465,8 @@ tasks:
     label: "提升至 Test 环境"
     spec: "CICD.md"
     gate: L1
-    executor: orchestrator
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
     tools:
       allow: [file-rw, search, bash]
       deny: [modify-specs, modify-code]
@@ -489,7 +501,8 @@ tasks:
     label: "Release 资产准备"
     spec: "CICD.md"
     gate: L1
-    executor: orchestrator
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
     tools:
       allow: [file-rw, search, bash, sub-agent]
       deny: [modify-specs, modify-code]
@@ -547,7 +560,8 @@ tasks:
     label: "Release 上线许可（L3）"
     spec: "CICD.md"
     gate: L3
-    executor: orchestrator
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
     tools:
       allow: [file-rw, search, bash]
       deny: [modify-specs, modify-code]
@@ -586,7 +600,8 @@ tasks:
     label: "Hotfix 初始化"
     spec: "CICD.md"
     gate: L1
-    executor: orchestrator
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
     tools:
       allow: [file-rw, search, bash]
       deny: [modify-specs]
@@ -604,7 +619,8 @@ tasks:
     label: "回灌主线"
     spec: "CICD.md"
     gate: L1
-    executor: orchestrator
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
     tools:
       allow: [file-rw, search, bash]
       deny: [modify-specs, modify-code]
@@ -688,20 +704,20 @@ spawn_rules:
     condition: "达标（≥ 阈值，由 harness.yml.gates.quality_threshold 决定）→ product-acceptance"
     # 不达标：回退对应 code 任务状态为 in-progress，重新执行（见 SPRINT.md 质量回退协议）
   - from: product-acceptance
-    to: [code, pr]
-    condition: "偏差→code 修复；通过→pr 创建合并请求"
-  - from: pr
-    to: [sprint-close]
-    condition: "PR 已合并"
+    to: [code, sprint-close]
+    condition: "偏差→code 修复；通过→先归档 Sprint 元数据"
   - from: sprint-close
+    to: [pr]
+    condition: "归档计划和项目指针已纳入 sprint 分支"
+  - from: pr
     to: []
-    condition: "Sprint 闭环结束（生产/测试发布作为独立 deploy-sprint）"
+    condition: "PR 已合并且 worktree 安全清理，Sprint 闭环结束"
 
   # ─── deploy-sprint 流转（H-OPT v1.6：发布作为独立 Sprint，无 worktree）─────
-  # 触发：feature-sprint sprint-close 通过 + 项目要求 promote 到 test/prod。
+  # 触发：feature-sprint pr 完成合并与安全清理 + 项目要求 promote 到 test/prod。
   # deploy-sprint 任务集（test）：promote-prep → build-image → promote-test → integration
   # deploy-sprint 任务集（prod）：上述 + release-prep → migration-design+regression → release-approval(L3) → prod-deploy → back-merge → observe
-  - from: sprint-close
+  - from: pr
     to: [promote-prep]
     condition: "显式启动独立 deploy-sprint（test 或 prod）；不创建 worktree"
   - from: promote-prep

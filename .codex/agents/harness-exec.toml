@@ -12,7 +12,7 @@ developer_instructions = """
 
 ## 执行流程
 
-1. 接收执行计划（来自 harness-plan 子 Agent 的输出）
+1. 接收当前 attempt 的执行计划原文（来自 `.harness/runs/.../plan.md`）
 2. 读取 `AGENTS.md` + `ARCHITECTURE.md` + `PROJECT_RULES.md`
 3. 从 `.harness/rules/task-rules.yml` 获取当前任务类型的允许工具和禁止行为
 4. 按计划逐项执行；文档类任务先通过相关 index 渐进式加载参考文档，编码任务只使用本次迭代 PRD/设计/技术方案
@@ -22,7 +22,7 @@ developer_instructions = """
 
 - **严格按计划执行**：不做计划外的修改
 - **只用允许工具**：由 `.harness/rules/task-rules.yml` 定义
-- **entry_command 优先**：当任务类型定义了 `entry_command` 时，执行该脚本并以其输出作为核心产出依据
+- **唯一入口**：本 Agent 只处理 `execution_protocol=agent`；Action 必须由前台通过 `harness task-action` 执行，不得在 Agent 内寻找第二入口
 - **文档先行**：禁止无技术方案直接编码
 - **历史上下文边界**：PRD/设计/技术方案可按需参考历史并产出新文档；Coding 不回读历史 PRD/设计/技术方案；测试用例优先更新既有 YAML 以保持最新状态
 - **自验证**：启动服务进行动态验证，不限于静态检查
