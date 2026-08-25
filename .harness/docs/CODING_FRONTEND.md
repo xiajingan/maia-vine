@@ -13,12 +13,12 @@ Coding 只读取本次迭代 PRD、设计、技术方案与项目编码规范。
 
 ## 完成标准（DoD）
 
-**通用**：`pnpm typecheck && pnpm lint && pnpm test` 通过，覆盖率 ≥ 80%，技术债记录到 `tech-debt-tracker.md`
+**通用**：`config/technology.yml` 声明的前端必需命令全部通过，覆盖率 ≥ 80%，技术债记录到 `tech-debt-tracker.md`
 
 **前端附加**：
 - **浏览器联调必须执行**：使用 `webapp-testing` 或 `chrome-devtools` 验证，禁止 curl/单测替代
-- **联调截图交付**：每个任务产出 Playwright 截图证明渲染和交互正常
-- **E2E 场景用例**：新增/变更的业务链路须有 `tests/e2e/scenarios/` 下对应的 Playwright Test 用例
+- **联调截图交付**：每个任务产出浏览器截图证明渲染和交互正常
+- **E2E 场景用例**：新增/变更的业务链路须有项目 E2E runner 可执行的场景用例
 - **侦察优先**：先截图确认实际 DOM，再写测试断言，禁止盲猜 selector
 - **修改现有优先**：新增文件须在技术方案中说明理由
 - **原型保真**：实现保留原型的容器/标题区/卡片/气泡的结构与层级；原型示例的所有内容类型/状态在实现端可被看到

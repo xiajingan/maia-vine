@@ -6,10 +6,11 @@ import copy
 import json
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
-from mai_harness.runtime.domain.modes import validate_mode_config
+from mai_harness.runtime.domain.modes import LEGACY_PROJECT_TYPES, PROJECT_TYPES, validate_mode_config
 from mai_harness.runtime.infrastructure.core.command import harness_command
 from mai_harness.runtime.infrastructure.core.paths import PATHS
 from mai_harness.runtime.infrastructure.utils import load_yaml
@@ -26,7 +27,7 @@ HARNESS_DEFAULTS: dict[str, Any] = load_yaml(DEFAULT_CONFIG_PATH)
 SCHEMA = {
     "agent_runtime.primary": (str, {"codex", "agy", "copilot"}),
     "project.mode": (str, {"standalone", "managed", "control"}),
-    "project.stack": (str, {"python-backend", "fullstack", "frontend"}),
+    "project.type": (str, PROJECT_TYPES),
     "automation.enabled": (bool, None),
     "automation.default_mode": (str, {"report-only", "safe-fix"}),
     "task_execution.max_review_retries": (int, range(0, 6)),
@@ -112,7 +113,86 @@ def validate(config: dict[str, Any]) -> list[str]:
                 re.compile(pattern)
             except (re.error, TypeError):
                 errors.append(f"delivery.branches.{environment}: 非法正则 {pattern!r}")
-    if config.get("project", {}).get("mode") == "control":
+    delivery = config.get("delivery", {})
+    manifests_dir = delivery.get("manifests_dir")
+    if (
+        not isinstance(manifests_dir, str)
+        or not manifests_dir
+        or Path(manifests_dir).is_absolute()
+        or ".." in Path(manifests_dir).parts
+    ):
+        errors.append("delivery.manifests_dir: 必须是安全的工程内相对路径")
+    library_verifiers = delivery.get("supply_chain_verification_commands", [])
+    if not isinstance(library_verifiers, list) or any(
+        not isinstance(command, list)
+        or not command
+        or not all(isinstance(item, str) and item for item in command)
+        or not any("{manifest}" in item for item in command)
+        for command in library_verifiers
+    ):
+        errors.append("delivery.supply_chain_verification_commands: 必须是包含 {manifest} 的 argv 数组列表")
+    dependencies = config.get("dependencies", {})
+    if not isinstance(dependencies, dict):
+        errors.append("dependencies: 必须是对象")
+    else:
+        providers = dependencies.get("providers", {})
+        if not isinstance(providers, dict):
+            errors.append("dependencies.providers: 必须是对象")
+        else:
+            for provider_id, provider in providers.items():
+                if not isinstance(provider_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,127}", provider_id):
+                    errors.append(f"dependencies.providers.{provider_id}: provider ID 非法")
+                    continue
+                if not isinstance(provider, dict):
+                    errors.append(f"dependencies.providers.{provider_id}: 必须是对象")
+                    continue
+                if "kind" in provider:
+                    errors.append(
+                        f"dependencies.providers.{provider_id}.kind: 已移除；Provider 工程自身必须使用 type=library"
+                    )
+                if provider.get("orchestration") not in {"coordinated", "assignment"}:
+                    errors.append(
+                        f"dependencies.providers.{provider_id}.orchestration: 必须为 coordinated 或 assignment"
+                    )
+                for field in ("path", "package"):
+                    if not isinstance(provider.get(field), str) or not provider[field].strip():
+                        errors.append(f"dependencies.providers.{provider_id}.{field}: 必须是非空字符串")
+                capabilities = provider.get("capabilities", {})
+                if not isinstance(capabilities, dict):
+                    errors.append(f"dependencies.providers.{provider_id}.capabilities: 必须是对象")
+                    continue
+                for capability_id, capability in capabilities.items():
+                    if not isinstance(capability_id, str) or not re.fullmatch(
+                        r"[a-z0-9][a-z0-9._-]{2,127}", capability_id
+                    ):
+                        errors.append(
+                            f"dependencies.providers.{provider_id}.capabilities.{capability_id}: capability ID 非法"
+                        )
+                    if not isinstance(capability, dict):
+                        errors.append(f"dependencies.providers.{provider_id}.capabilities.{capability_id}: 必须是对象")
+                        continue
+                    commands = capability.get("consumer_contract_commands", [])
+                    if (
+                        not isinstance(commands, list)
+                        or not commands
+                        or not all(isinstance(item, str) and item for item in commands)
+                    ):
+                        errors.append(
+                            f"dependencies.providers.{provider_id}.capabilities.{capability_id}.consumer_contract_commands: 必须是非空命令名称数组"
+                        )
+                    elif unknown := {name for name in commands if not config.get("commands", {}).get(name)}:
+                        errors.append(
+                            f"dependencies.providers.{provider_id}.capabilities.{capability_id}: 未定义命令 {sorted(unknown)}"
+                        )
+                    lock_command = capability.get("consumer_lock_command")
+                    if lock_command is not None and (
+                        not isinstance(lock_command, str) or not config.get("commands", {}).get(lock_command)
+                    ):
+                        errors.append(
+                            f"dependencies.providers.{provider_id}.capabilities.{capability_id}.consumer_lock_command: 必须引用已定义命令"
+                        )
+    project = config.get("project", {})
+    if isinstance(project, dict) and project.get("mode") == "control":
         environments = config.get("control", {}).get("kubernetes", {}).get("environments", {})
         for environment in ("test", "prod"):
             policy = environments.get(environment, {})
@@ -147,10 +227,25 @@ def load_harness_config(
     defaults = load_yaml(baseline)
     if not defaults:
         raise FileNotFoundError(f"Harness 默认配置不存在: {baseline}")
+    if not isinstance(defaults, dict):
+        raise ValueError(f"Harness 默认配置顶层必须是对象: {baseline}")
     user = load_yaml(source) if source.exists() else {}
-    project = user.setdefault("project", {}) if user else {}
-    if "profile" in project and "stack" not in project:
-        project["stack"] = project.pop("profile")
+    if not isinstance(user, dict):
+        raise ValueError(f"Harness 项目配置顶层必须是对象: {source}")
+    project = user.get("project")
+    if isinstance(project, dict):
+        legacy_fields = [field for field in ("stack", "profile") if field in project]
+        if "type" not in project and len(legacy_fields) == 1:
+            legacy = legacy_fields[0]
+            raw_value = project.pop(legacy)
+            value = LEGACY_PROJECT_TYPES.get(str(raw_value), raw_value)
+            project["type"] = value
+            if value in LEGACY_PROJECT_TYPES.values():
+                warnings.warn(
+                    f"project.{legacy} 已废弃；请迁移为 project.type={value}",
+                    FutureWarning,
+                    stacklevel=2,
+                )
     merged = deep_merge(defaults, user)
     weights = [item.get("weight") for item in merged.get("quality", {}).get("dimensions", {}).values()]
     if any(type(item) is not int or item < 0 for item in weights) or sum(weights) != 100:
@@ -211,20 +306,32 @@ def inspect_package_capabilities(path: Path) -> tuple[set[str], set[str], list[s
 
 
 def command_enabled(config: dict[str, Any], name: str, root: Path | None = None) -> bool:
+    return not command_diagnostics(config, name, root)
+
+
+def command_diagnostics(config: dict[str, Any], name: str, root: Path | None = None) -> list[str]:
     condition = config.get("command_conditions", {}).get(name, {})
     if not isinstance(condition, dict):
-        return False
+        return [f"commands.{name}: command_conditions 必须是对象"]
     project = root or PATHS.project
     required_file = condition.get("file_exists")
     if required_file and not (project / required_file).is_file():
-        return False
+        return [f"commands.{name}: 缺少 {required_file}"]
     dependencies = condition.get("package_dependencies", [])
     scripts = condition.get("package_scripts", [])
     if dependencies or scripts:
         declared, declared_scripts, errors = inspect_package_capabilities(project / "package.json")
-        if errors or not set(dependencies) <= declared or not set(scripts) <= declared_scripts:
-            return False
-    return True
+        if errors:
+            return [f"commands.{name}: {error}" for error in errors]
+        missing_dependencies = set(dependencies) - declared
+        missing_scripts = set(scripts) - declared_scripts
+        diagnostics = []
+        if missing_dependencies:
+            diagnostics.append(f"commands.{name}: 缺少依赖 {', '.join(sorted(missing_dependencies))}")
+        if missing_scripts:
+            diagnostics.append(f"commands.{name}: 缺少 scripts.{', scripts.'.join(sorted(missing_scripts))}")
+        return diagnostics
+    return []
 
 
 def resolve_command_group(

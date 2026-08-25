@@ -2,12 +2,48 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mai.local/harness/delivery.schema.json",
   "type": "object",
-  "required": ["schema_version", "delivery_id", "assignment_id", "assignment_digest", "project_id", "source_commit", "artifacts", "quality", "manifest_digest"],
+  "required": ["schema_version", "delivery_id", "project_id", "source_commit", "artifacts", "quality", "manifest_digest"],
   "properties": {
     "schema_version": {"const": 1},
     "delivery_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
     "assignment_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
     "assignment_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "satisfies": {
+      "type": "object",
+      "properties": {
+        "assignments": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["assignment_id", "assignment_digest"],
+            "properties": {
+              "assignment_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+              "assignment_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "dependency_sessions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["session_id", "request_digest"],
+            "properties": {
+              "session_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+              "request_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "anyOf": [
+        {"required": ["assignments"], "properties": {"assignments": {"minItems": 1}}},
+        {"required": ["dependency_sessions"], "properties": {"dependency_sessions": {"minItems": 1}}}
+      ],
+      "additionalProperties": false
+    },
     "project_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
     "source_commit": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"},
     "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -42,5 +78,9 @@
     },
     "quality": {"type": "object", "properties": {"status": {"const": "passed"}}, "required": ["status"]}
   },
+  "anyOf": [
+    {"required": ["assignment_id", "assignment_digest"]},
+    {"required": ["satisfies"]}
+  ],
   "additionalProperties": true
 }

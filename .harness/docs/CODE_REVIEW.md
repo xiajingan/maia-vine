@@ -12,7 +12,7 @@
 | 维度 | 参考规范 | 核心检查 |
 |------|---------|---------|
 | 编码规范 | PROJECT_RULES.md Key Rules + Checklist | 全部条目 + 模块职责单一、复杂逻辑有注释 |
-| 架构一致性 | 技术方案 + TECH_BACKEND/FRONTEND.md + 设计文档 | 分层正确（Controller→Service→Repository）、前端 Composition API、实现与方案一致、前端 DOM 结构与原型对齐（外框/标题/分块），偏离须有设计变更说明 |
+| 架构一致性 | 技术方案 + TECH_BACKEND/FRONTEND.md + 设计文档 | 分层正确、公共能力来自 ARCHITECTURE 登记的 Provider、无跨仓库源码复制或重复 helper、实现与方案一致、前端 DOM 结构与原型对齐 |
 | 安全合规 | CODING_BACKEND.md 安全章节 | 认证、输入校验、数据安全、接口安全、密钥管理 |
 | 可靠性 | CODING_BACKEND.md 可靠性章节 | 错误处理、日志、重试、幂等、并发 + 前端 onUnmounted 清理 |
 | 性能 | PROJECT_RULES.md 代码质量基线 | 无重复 IO、异步队列、无大表 JOIN、缓存规范、前端无多余重渲染 |
@@ -27,7 +27,7 @@
 | Minor | 可维护性、非关键性能 | 建议修复，不阻塞 |
 | Suggestion | 优化建议 | 记录 tech-debt-tracker.md |
 
-**通过标准**：0 Critical + 0 Major + Minor ≤ 5 + `config/harness.yml` 当前 stack 静态检查通过
+**通过标准**：0 Critical + 0 Major + Minor ≤ 5 + `config/harness.yml` 当前 project.type 静态检查通过
 
 ---
 
@@ -47,6 +47,7 @@
 **执行步骤**：
 1. 确定范围（`git diff --name-only`）
 2. 加载规范（PROJECT_RULES + ARCHITECTURE + CODING_BACKEND/FRONTEND + 技术方案）
-3. 静态分析（执行 `config/harness.yml` 当前 stack 的 lint/typecheck，并运行适用的依赖审计）
+3. 静态分析（执行 `config/harness.yml` 当前 project.type 的 lint/typecheck，并运行适用的依赖审计）
 4. 6 维 × 每个变更文件逐项检查
-5. 生成报告 → 判定通过/不通过 → 不通过派生修复任务
+5. 若涉及公共包，核对 dependency session/Assignment 摘要、不可变 Delivery、消费者契约证据及 lock 中的精确版本+SHA-256
+6. 生成报告 → 判定通过/不通过 → 不通过派生修复任务

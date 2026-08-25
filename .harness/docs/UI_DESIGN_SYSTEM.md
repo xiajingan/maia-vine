@@ -6,7 +6,7 @@
 > - UI_DESIGN_SYSTEM.md = 「具体长什么样」（token、栈、组件）
 > - TECH_FRONTEND.md = 「代码怎么实现」（架构、约束）
 
-**目标**：所有基于 Harness 的项目（H5 微站、Dashboard、Admin、Marketing Site）在视觉风格、组件行为、技术栈上保持一致；新项目零思考即可对齐基线。
+**目标**：所有基于 Harness 的项目在视觉 token 和交互质量上保持一致；技术栈以 `config/technology.yml` 为真源，本文提供默认 Vue profile。
 
 **产出物**：本文为只读规范。落地资源参见：
 - `templates/ui/tokens.css`（CSS 变量 — HTML 原型 + 应用入口共用）
@@ -17,7 +17,7 @@
 
 ## 1. 前端技术栈基线
 
-> 所有 Harness 项目前端**必须**使用此栈，禁止平行选型。新栈引入须走专项规范更新任务。
+> 下表是 `technology.defaults.yml` 的默认适配，不是 `project.type=frontend` 的固定语言定义。项目覆盖技术栈时，必须同步登记 manifest、必需命令和本地组件约束。
 
 | 类别 | 选择 | 版本基线 | 说明 |
 |------|------|---------|------|

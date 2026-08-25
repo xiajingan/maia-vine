@@ -1,4 +1,4 @@
-"""Engineering-mode invariants and controlled profile migration."""
+"""Engineering-mode invariants and controlled mode migration."""
 
 from __future__ import annotations
 
@@ -7,16 +7,18 @@ from pathlib import Path
 
 from mai_harness.runtime.domain.modes import MODES as MODES
 from mai_harness.runtime.domain.modes import POLICIES as POLICIES
-from mai_harness.runtime.domain.modes import STACKS as STACKS
+from mai_harness.runtime.domain.modes import PROJECT_TYPES as PROJECT_TYPES
 from mai_harness.runtime.domain.modes import validate_mode_config as validate_mode_config
 
 
-def profile_marker_path(project: Path) -> Path:
-    return project / ".harness/state/profile.json"
+def mode_marker_path(project: Path) -> Path:
+    return project / ".harness/state/mode.json"
 
 
 def read_installed_mode(project: Path) -> str | None:
-    marker = profile_marker_path(project)
+    marker = mode_marker_path(project)
+    if not marker.exists():
+        marker = project / ".harness/state/profile.json"
     if not marker.exists():
         return None
     value = json.loads(marker.read_text(encoding="utf-8")).get("mode")

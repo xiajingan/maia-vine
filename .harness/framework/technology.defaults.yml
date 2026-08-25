@@ -1,0 +1,23 @@
+version: 1
+
+# project.type 只选择适用组件；语言、框架和可执行能力由本文件声明。
+components:
+  backend:
+    language: python
+    framework: generic
+    manifest: pyproject.toml
+    required_commands: [lint, unit]
+    unit_command: unit
+  frontend:
+    language: typescript
+    framework: vue
+    manifest: package.json
+    required_commands: [frontend_lint, frontend_typecheck, frontend_unit, e2e]
+    unit_command: frontend_unit
+  library:
+    language: python
+    framework: generic
+    manifest: pyproject.toml
+    required_commands: [lint, unit, package_build]
+    unit_command: unit
+    artifact_glob: dist/*

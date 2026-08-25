@@ -5,7 +5,7 @@ version: 1
 # legacy-migration mapping; concrete asset selection lives in scaffold-assets.yml.
 managed:
   runtime: .harness/runtime
-  config: .harness/config
+  config: .harness/framework
   schemas: .harness/schemas
   rules: .harness/rules
   eslint: .harness/eslint

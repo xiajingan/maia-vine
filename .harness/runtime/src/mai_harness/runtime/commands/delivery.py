@@ -1,4 +1,4 @@
-"""Managed Delivery Manifest publish port."""
+"""Managed or Standalone Library Delivery Manifest publish port."""
 
 from __future__ import annotations
 
@@ -20,6 +20,15 @@ from mai_harness.runtime.infrastructure.manifest import (
 )
 
 
+def delivery_policy(config: dict) -> dict:
+    project = config["project"]
+    if project["mode"] == "managed":
+        return config["management"]
+    if project["mode"] == "standalone" and project["type"] == "library":
+        return config["delivery"]
+    raise ValueError("delivery 命令仅允许 managed 或 Standalone Library 工程")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -29,19 +38,22 @@ def main() -> int:
     verify.add_argument("manifest", type=Path)
     args = parser.parse_args()
     config = load_harness_config()
-    if config["project"]["mode"] != "managed":
-        parser.error("delivery 命令仅允许 managed 模式")
+    try:
+        policy = delivery_policy(config)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.command == "publish":
-        print(publish_delivery(PATHS.project, config["management"]["deliveries_dir"], load_manifest(args.manifest)))
+        directory = policy.get("deliveries_dir") or policy.get("manifests_dir")
+        print(publish_delivery(PATHS.project, directory, load_manifest(args.manifest)))
         return 0
     delivery = load_manifest(args.manifest)
     if errors := validate_delivery(delivery):
         parser.error("Delivery 校验失败: " + "; ".join(errors))
     if errors := validate_delivery_publication(PATHS.project, args.manifest, delivery):
         parser.error("Delivery 发布登记校验失败: " + "; ".join(errors))
-    commands = config["management"].get("supply_chain_verification_commands", [])
+    commands = policy.get("supply_chain_verification_commands", [])
     if not commands:
-        parser.error("delivery verify 必须配置 management.supply_chain_verification_commands")
+        parser.error("delivery verify 必须配置当前治理模式的 supply_chain_verification_commands")
     expected = delivery_artifact_identities(delivery)
     verifiers = []
     for index, command in enumerate(commands, start=1):

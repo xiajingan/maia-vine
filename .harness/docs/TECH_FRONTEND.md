@@ -94,7 +94,7 @@
 > **知行合一**：前端开发须在真实浏览器环境中验证交互行为。
 
 **自检清单**：
-- 组件全部 Composition API、状态划分正确、API 封装在 services/
+- 组件模式与 `config/technology.yml` 声明的框架一致，状态划分正确，API 边界清晰
 - 路由鉴权标注、性能满足约束（LCP < 2s，H5 无 Vue 运行时）
 - 命名符合规范、Microsite H5 纯 HTML + 内联 CSS/JS
 - 联调验证通过（详见 CODING_FRONTEND.md）

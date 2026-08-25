@@ -7,7 +7,30 @@ from pathlib import Path
 from typing import Any
 
 MODES = {"standalone", "managed", "control"}
-STACKS = {"python-backend", "fullstack", "frontend"}
+PROJECT_TYPES = {"backend", "fullstack", "frontend", "library"}
+PROJECT_TYPE_COMPONENTS = {
+    "backend": ("backend",),
+    "frontend": ("frontend",),
+    "fullstack": ("backend", "frontend"),
+    "library": ("library",),
+}
+LEGACY_PROJECT_TYPES = {
+    "backend": "backend",
+    "python-backend": "backend",
+    "frontend": "frontend",
+    "fullstack": "fullstack",
+    "library": "library",
+}
+
+
+def resolve_project_type(project: dict[str, Any]) -> str | None:
+    """Resolve the canonical project type while accepting one legacy field."""
+    declared = [field for field in ("type", "stack", "profile") if field in project]
+    if len(declared) != 1:
+        return None
+    field = declared[0]
+    value = project.get(field)
+    return value if field == "type" else LEGACY_PROJECT_TYPES.get(str(value))
 
 
 @dataclass(frozen=True)
@@ -32,11 +55,19 @@ def validate_mode_config(config: dict[str, Any]) -> list[str]:
     project = config.get("project", {})
     if not isinstance(project, dict):
         return ["project: 必须是对象"]
+    if "kind" in project:
+        errors.append("project.kind: 已移除；公共包直接使用 project.type=library")
+    declared_types = [field for field in ("type", "stack", "profile") if field in project]
+    if len(declared_types) > 1:
+        errors.append(f"project: type/stack/profile 只能声明一个，实际 {declared_types}")
     mode = project.get("mode")
     if mode not in MODES:
         return [f"project.mode: 必须是 {sorted(MODES)}"]
-    if project.get("stack") not in STACKS:
-        errors.append(f"project.stack: 必须是 {sorted(STACKS)}")
+    project_type = resolve_project_type(project)
+    if project_type not in PROJECT_TYPES:
+        errors.append(f"project.type: 必须是 {sorted(PROJECT_TYPES)}")
+    if mode == "control" and project_type == "library":
+        errors.append("project.type: control 模式不能声明为 library")
     if not isinstance(project.get("id"), str) or not project["id"].strip():
         errors.append("project.id: 必须是稳定的非空工程 ID")
     expected_owner = "control" if mode in {"managed", "control"} else "self"

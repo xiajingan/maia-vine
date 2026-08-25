@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from mai_harness.runtime.application.collaboration import dispatch_assignment, target_assignment_service
+from mai_harness.runtime.application.dependency_session import validate_session
 from mai_harness.runtime.domain.dependency_graph import dependency_order
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.core.paths import resolve_managed_project, resolve_project_relative
@@ -125,8 +126,18 @@ class ControlAssignmentService:
                         continue
                     assignment_id = item.get("assignment_id")
                     document_errors = []
-                    if assignment_id not in known_assignments:
+                    if kind == "Response" and assignment_id not in known_assignments:
                         document_errors.append(f"{kind} 引用了不存在的 Assignment: {assignment_id}")
+                    if kind == "Delivery":
+                        document_errors.extend(validate_delivery(item))
+                        assignment_ids = ([assignment_id] if assignment_id else []) + [
+                            binding.get("assignment_id")
+                            for binding in ((item.get("satisfies") or {}).get("assignments") or [])
+                            if isinstance(binding, dict)
+                        ]
+                        for referenced in assignment_ids:
+                            if referenced not in known_assignments:
+                                document_errors.append(f"Delivery 引用了不存在的 Assignment: {referenced}")
                     expected_name = (
                         f"{assignment_id}.json" if kind == "Response" else f"{item.get('delivery_id', '')}.json"
                     )
@@ -196,10 +207,34 @@ def assert_registered_delivery_states(
             control_root, project["project_path"], f"projects.{project_id}.project_path"
         )
         service = target_assignment_service(managed_root)
-        status = service.status(delivery.get("assignment_id", ""))
-        valid_paths = {Path(item["path"]).resolve() for item in status.get("deliveries", [])}
-        if status.get("state") != "delivered" or resolved not in valid_paths:
-            raise ValueError(f"Delivery 未通过所属 Managed 的 Assignment/Response/供应链完整门禁: {path}")
+        assignment_ids = ([delivery.get("assignment_id")] if delivery.get("assignment_id") else []) + [
+            item.get("assignment_id")
+            for item in ((delivery.get("satisfies") or {}).get("assignments") or [])
+            if isinstance(item, dict)
+        ]
+        for assignment_id in assignment_ids:
+            status = service.status(str(assignment_id))
+            valid_paths = {Path(item["path"]).resolve() for item in status.get("deliveries", [])}
+            if status.get("state") != "delivered" or resolved not in valid_paths:
+                raise ValueError(f"Delivery 未通过所属 Managed 的 Assignment/Response/供应链完整门禁: {path}")
+        session_bindings = (delivery.get("satisfies") or {}).get("dependency_sessions") or []
+        for binding in session_bindings:
+            if not isinstance(binding, dict):
+                raise ValueError(f"Delivery dependency session 绑定非法: {path}")
+            state = StateStore(managed_root / ".harness/state/dependency-sessions/completed").read_json(
+                f"{binding.get('session_id', '')}.json"
+            )
+            if (
+                not isinstance(state, dict)
+                or validate_session(state)
+                or state.get("status") != "completed"
+                or state.get("provider_project_id") != project_id
+                or state.get("request_digest") != binding.get("request_digest")
+                or state.get("delivery", {}).get("manifest_digest") != delivery.get("manifest_digest")
+            ):
+                raise ValueError(f"Delivery 未通过 coordinated dependency session 完整门禁: {path}")
+        if not assignment_ids and not session_bindings:
+            raise ValueError(f"Delivery 未绑定 Assignment 或 dependency session: {path}")
 
 
 def assert_global_delivery_ids(projects: dict[str, dict[str, Any]], control_root: Path) -> None:

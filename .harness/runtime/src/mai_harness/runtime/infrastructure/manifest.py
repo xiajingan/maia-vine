@@ -103,12 +103,51 @@ def validate_delivery(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if not isinstance(data, dict):
         return ["Delivery Manifest: 必须是对象"]
-    for field in ("delivery_id", "assignment_id", "project_id"):
+    for field in ("delivery_id", "project_id"):
         require_id(data.get(field), field, errors)
+    legacy_binding = data.get("assignment_id") is not None or data.get("assignment_digest") is not None
+    if legacy_binding:
+        require_id(data.get("assignment_id"), "assignment_id", errors)
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(data.get("assignment_digest", ""))):
+            errors.append("assignment_digest: 必须是 SHA-256")
+    satisfies = data.get("satisfies")
+    satisfies_declared = isinstance(satisfies, dict)
+    if satisfies is not None and not isinstance(satisfies, dict):
+        errors.append("satisfies: 必须是对象")
+        satisfies = {}
+    bindings = 0
+    if isinstance(satisfies, dict):
+        assignments = satisfies.get("assignments", [])
+        sessions = satisfies.get("dependency_sessions", [])
+        for field, values, id_field, digest_field in (
+            ("assignments", assignments, "assignment_id", "assignment_digest"),
+            ("dependency_sessions", sessions, "session_id", "request_digest"),
+        ):
+            if not isinstance(values, list):
+                errors.append(f"satisfies.{field}: 必须是数组")
+                continue
+            seen: set[str] = set()
+            for index, item in enumerate(values):
+                if not isinstance(item, dict):
+                    errors.append(f"satisfies.{field}[{index}]: 必须是对象")
+                    continue
+                require_id(item.get(id_field), f"satisfies.{field}[{index}].{id_field}", errors)
+                value_digest = str(item.get(digest_field, ""))
+                if not re.fullmatch(r"sha256:[0-9a-f]{64}", value_digest):
+                    errors.append(f"satisfies.{field}[{index}].{digest_field}: 必须是 SHA-256")
+                identity = str(item.get(id_field, ""))
+                if identity in seen:
+                    errors.append(f"satisfies.{field}: 绑定 ID 重复 {identity}")
+                seen.add(identity)
+                bindings += 1
+            if field == "assignments" and legacy_binding and str(data.get("assignment_id", "")) in seen:
+                errors.append(f"satisfies.assignments: 与 legacy assignment 重复 {data.get('assignment_id')}")
+        if satisfies_declared and bindings == 0:
+            errors.append("satisfies: 至少包含一个 assignment 或 dependency session 绑定")
+    if not legacy_binding and bindings == 0:
+        errors.append("Delivery 必须绑定 assignment 或 dependency session")
     if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", str(data.get("source_commit", ""))):
         errors.append("source_commit: 必须是完整 Git object ID（SHA-1 或 SHA-256）")
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(data.get("assignment_digest", ""))):
-        errors.append("assignment_digest: 必须是 SHA-256")
     if data.get("schema_version") != 1:
         errors.append("schema_version: 必须为 1")
     quality = data.get("quality")
@@ -145,22 +184,9 @@ def validate_delivery(data: dict[str, Any]) -> list[str]:
                 for field in ("package", "version"):
                     if not isinstance(item.get(field), str) or not item[field].strip():
                         errors.append(f"artifacts[{index}].{field}: dependency-package 必填")
-                package = str(item.get("package", ""))
-                version = str(item.get("version", ""))
-                normalized_package = r"[-_.]+".join(re.escape(part) for part in re.split(r"[-_.]+", package))
                 package_sha = str(item.get("sha256", "")).removeprefix("sha256:")
-                if (
-                    package
-                    and version
-                    and not re.search(
-                        rf"/{normalized_package}-{re.escape(version)}[^/]*\.(?:whl|tar\.gz)#sha256={package_sha}$",
-                        ref,
-                        re.IGNORECASE,
-                    )
-                ):
-                    errors.append(
-                        f"artifacts[{index}].ref: dependency-package 必须以 package/version 文件名和 #sha256 绑定"
-                    )
+                if package_sha and not ref.endswith(f"#sha256={package_sha}"):
+                    errors.append(f"artifacts[{index}].ref: dependency-package 必须以 #sha256 绑定内容")
             if item.get("type") == "client-package":
                 client_digest = str(item.get("sha256", "")).removeprefix("sha256:")
                 if not re.search(rf"/(?:sha256:)?{re.escape(client_digest)}(?:/|\.|$)", ref):
@@ -213,6 +239,25 @@ def validate_delivery(data: dict[str, Any]) -> list[str]:
     elif recorded != digest(_without(data, "manifest_digest", "published_at")):
         errors.append("manifest_digest: 与当前 Delivery 内容不一致")
     return errors
+
+
+def delivery_assignment_digest(data: dict[str, Any], assignment_id: str) -> str:
+    """Return the bound digest for legacy or multi-source Assignment deliveries."""
+    if data.get("assignment_id") == assignment_id:
+        return str(data.get("assignment_digest", ""))
+    for item in (data.get("satisfies") or {}).get("assignments") or []:
+        if isinstance(item, dict) and item.get("assignment_id") == assignment_id:
+            return str(item.get("assignment_digest", ""))
+    return ""
+
+
+def delivery_references_assignment(data: dict[str, Any], assignment_id: str) -> bool:
+    if data.get("assignment_id") == assignment_id:
+        return True
+    return any(
+        isinstance(item, dict) and item.get("assignment_id") == assignment_id
+        for item in ((data.get("satisfies") or {}).get("assignments") or [])
+    )
 
 
 def delivery_artifact_identities(data: dict[str, Any]) -> list[dict[str, str]]:

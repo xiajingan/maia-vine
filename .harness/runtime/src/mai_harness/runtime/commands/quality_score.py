@@ -21,6 +21,7 @@ from mai_harness.runtime.infrastructure.harness_config import (
     resolve_command,
     resolve_command_group,
 )
+from mai_harness.runtime.infrastructure.technology_config import load_technology_config, unit_command_names
 from mai_harness.runtime.infrastructure.utils import load_yaml, try_run
 
 DIMENSION_KEYS = {
@@ -205,6 +206,12 @@ class Score:
 
 
 def coverage_percent(directory: Path) -> float:
+    generic = directory / "harness-coverage.json"
+    if generic.exists():
+        try:
+            return float(json.loads(generic.read_text())["percent"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return 0.0
     summary = directory / "coverage-summary.json"
     if summary.exists():
         try:
@@ -232,8 +239,15 @@ def calculate(sprint: str, level: str, threshold: int, root: Path, coverage_dir:
     static_ok = bool(static_results) and all(result.ok for result in static_results)
     static = weights["静态检查"] if static_ok else 0
     score.add("静态检查", static, f"- Commands: {len(static_commands)}\n- Passed: {static_ok}")
-    unit_command = resolve_command(commands.get("unit", []))
-    unit_ok = bool(unit_command and try_run(unit_command, cwd=root, env=build_unit_test_env(os.environ)).ok)
+    technology = load_technology_config(
+        path=root / "config/technology.yml",
+        defaults_path=paths.framework_config / "technology.defaults.yml",
+    )
+    unit_names = unit_command_names(technology, harness["project"]["type"])
+    unit_commands = [resolve_command(commands.get(name, [])) for name in unit_names]
+    unit_ok = bool(unit_commands) and all(
+        command and try_run(command, cwd=root, env=build_unit_test_env(os.environ)).ok for command in unit_commands
+    )
     coverage = coverage_percent(coverage_dir)
     unit_max = weights["单元测试 + 覆盖率"]
     unit = (
@@ -245,7 +259,11 @@ def calculate(sprint: str, level: str, threshold: int, root: Path, coverage_dir:
         if unit_ok
         else 0
     )
-    score.add("单元测试 + 覆盖率", unit, f"- 测试通过: {unit_ok}\n- 覆盖率: {coverage:.1f}%")
+    score.add(
+        "单元测试 + 覆盖率",
+        unit,
+        f"- Commands: {', '.join(unit_names)}\n- 测试通过: {unit_ok}\n- 覆盖率: {coverage:.1f}%",
+    )
     integration_files = [
         path
         for path in root.rglob("*")
@@ -302,7 +320,7 @@ def calculate(sprint: str, level: str, threshold: int, root: Path, coverage_dir:
     else:
         e2e_ok = False
     score.add("E2E 测试", weights["E2E 测试"] if e2e_ok else 0, f"- 当前用例: {len(current)}\n- 结果: {e2e_ok}")
-    ui_applicable = harness["project"]["stack"] in dimensions["ui_parity"].get("applies_to", [])
+    ui_applicable = harness["project"]["type"] in dimensions["ui_parity"].get("applies_to", [])
     ui_commands = [
         harness_command("check-prototype-coverage", "--sprint", sprint),
         harness_command("check-contract-strength", "--sprint", sprint),

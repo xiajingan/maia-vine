@@ -3,6 +3,7 @@ version: 1
 runtime:
   required_assets:
     - config/harness.yml
+    - config/technology.yml
     - .harness/install-manifest.yml
     - .harness/runtime/src/mai_harness/runtime/commands/harness_cli.py
     - .harness/rules/task-rules.yml
@@ -16,6 +17,7 @@ runtime:
     - CODING_FRONTEND.md
     - TECH_BACKEND.md
     - TECH_FRONTEND.md
+    - TECH_LIBRARY.md
     - CODE_REVIEW.md
     - OBSERVABILITY.md
     - QUALITY_SCORE.md

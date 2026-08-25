@@ -10,46 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from mai_harness.runtime.domain.actions import resolve_action
+from mai_harness.runtime.domain.modes import PROJECT_TYPES
 from mai_harness.runtime.infrastructure.core.paths import PATHS
 from mai_harness.runtime.infrastructure.utils import load_yaml
 
 KNOWN_GATES = {"L1", "L3"}
-KNOWN_STACKS = {"python-backend", "fullstack", "frontend"}
-KNOWN_TASKS = {
-    "infra",
-    "product",
-    "design",
-    "backend-design",
-    "frontend-design",
-    "code",
-    "test-case-gen",
-    "quality",
-    "pr",
-    "product-acceptance",
-    "sprint-close",
-    "observe",
-    "promote-prep",
-    "build-image",
-    "promote-test",
-    "integration",
-    "release-prep",
-    "migration-design",
-    "regression",
-    "release-approval",
-    "prod-deploy",
-    "hotfix-init",
-    "back-merge",
-    "managed-project-check",
-    "assignment-dispatch",
-    "assignment-status",
-    "delivery-verify",
-    "release-compose",
-    "test-integration",
-    "test-deploy",
-    "integration-finding",
-    "release-promote",
-    "release-rollback",
-}
 
 
 @dataclass
@@ -127,6 +92,7 @@ def validate(doc: Any, root: Path) -> Validation:
         "hotfix",
         "control",
         "maintenance",
+        "library-sprint",
     }
     if not isinstance(sprint_matrix, dict) or set(sprint_matrix) != expected_sprint_types:
         error(f"sprint_type_task_capabilities 必须完整声明: {sorted(expected_sprint_types)}")
@@ -187,6 +153,13 @@ def validate(doc: Any, root: Path) -> Validation:
             prefix = policy.get("branch_prefix")
             if not isinstance(prefix, str) or (policy.get("worktree") == "required" and not prefix.endswith("/")):
                 error(f"sprint_type_policies.{sprint_type}.branch_prefix 非法")
+    type_matrix = doc.get("sprint_type_project_types")
+    if not isinstance(type_matrix, dict) or set(type_matrix) != expected_sprint_types:
+        error(f"sprint_type_project_types 必须完整声明: {sorted(expected_sprint_types)}")
+    else:
+        for sprint_type, project_types in type_matrix.items():
+            if not isinstance(project_types, list) or not project_types or set(project_types) - PROJECT_TYPES:
+                error(f"sprint_type_project_types.{sprint_type} 必须是有效 project_type 数组")
     layout_path = (
         root / "config/distribution-layout.yml"
         if (root / "config/distribution-layout.yml").exists()
@@ -214,10 +187,9 @@ def validate(doc: Any, root: Path) -> Validation:
                     re.compile(pattern)
                 except (re.error, TypeError) as exc:
                     error(f'doc_section_rules["{directory}"] 含非法正则: {pattern} ({exc})')
-    keywords = sorted(KNOWN_TASKS, key=len, reverse=True)
+    # `tasks` 是任务类型唯一真源；能力矩阵和执行序列负责 fail-closed 覆盖校验。
+    keywords = sorted(tasks, key=len, reverse=True)
     for name, task in tasks.items():
-        if name not in KNOWN_TASKS:
-            warning(f"未知任务类型: {name}")
         if not isinstance(task, dict):
             error(f"tasks.{name} 必须是对象")
             continue
@@ -255,11 +227,13 @@ def validate(doc: Any, root: Path) -> Validation:
                 roots = [item.strip().rstrip("/") for item in output_path.split(" 或 ")]
                 if "<" not in output_path and not any(index == root or index.startswith(root + "/") for root in roots):
                     error(f"tasks.{name}.outputs.index 不在 outputs.path 内: {index}")
-        allowed_stacks = task.get("allowed_stacks")
-        if allowed_stacks is not None and (
-            not isinstance(allowed_stacks, list) or not allowed_stacks or not set(allowed_stacks) <= KNOWN_STACKS
+        allowed_project_types = task.get("allowed_project_types")
+        if allowed_project_types is not None and (
+            not isinstance(allowed_project_types, list)
+            or not allowed_project_types
+            or not set(allowed_project_types) <= PROJECT_TYPES
         ):
-            error(f"tasks.{name}.allowed_stacks 必须是已知 stack 的非空数组")
+            error(f"tasks.{name}.allowed_project_types 必须是已知 project_type 的非空数组")
         declared_modes = task.get("allowed_modes")
         derived_modes = {mode for mode, names in mode_matrix.items() if name in names}
         if declared_modes is not None and set(declared_modes) != derived_modes:
@@ -269,15 +243,17 @@ def validate(doc: Any, root: Path) -> Validation:
             error(f"tasks.{name}.execution_protocol 非法")
         if task.get("review_protocol") not in {None, "agent-full", "artifact-only"}:
             error(f"tasks.{name}.review_protocol 非法")
-        acceptance_by_stack = task.get("acceptance_by_stack")
-        if acceptance_by_stack is not None:
-            if not isinstance(acceptance_by_stack, dict) or not set(acceptance_by_stack) <= KNOWN_STACKS:
-                error(f"tasks.{name}.acceptance_by_stack 只能声明已知 stack")
+        acceptance_by_project_type = task.get("acceptance_by_project_type")
+        if acceptance_by_project_type is not None:
+            if not isinstance(acceptance_by_project_type, dict) or not set(acceptance_by_project_type) <= PROJECT_TYPES:
+                error(f"tasks.{name}.acceptance_by_project_type 只能声明已知 project_type")
             else:
-                for stack, items in acceptance_by_stack.items():
-                    stack_ids = validate_acceptance(items, f"tasks.{name}.acceptance_by_stack.{stack}", error, warning)
-                    if set(common_acceptance) & set(stack_ids):
-                        error(f"tasks.{name}.acceptance 与 {stack} acceptance ID 重复")
+                for project_type, items in acceptance_by_project_type.items():
+                    type_ids = validate_acceptance(
+                        items, f"tasks.{name}.acceptance_by_project_type.{project_type}", error, warning
+                    )
+                    if set(common_acceptance) & set(type_ids):
+                        error(f"tasks.{name}.acceptance 与 {project_type} acceptance ID 重复")
         tools = task.get("tools")
         if isinstance(tools, dict):
             for key in ("allow", "deny"):
@@ -332,18 +308,21 @@ def validate(doc: Any, root: Path) -> Validation:
             if keyword and keyword not in tasks:
                 error(f"tasks.{name}.prerequisites 引用未定义任务: {keyword}")
             elif keyword:
-                source_stacks = set((tasks.get(keyword) or {}).get("allowed_stacks") or KNOWN_STACKS)
-                target_stacks = set(task.get("allowed_stacks") or KNOWN_STACKS)
-                if not source_stacks & target_stacks:
-                    error(f"tasks.{name}.prerequisites 与 {keyword} 无可共同执行的 stack")
+                source_types = set((tasks.get(keyword) or {}).get("allowed_project_types") or PROJECT_TYPES)
+                target_types = set(task.get("allowed_project_types") or PROJECT_TYPES)
+                if not source_types & target_types:
+                    error(f"tasks.{name}.prerequisites 与 {keyword} 无可共同执行的 project_type")
         for group in task.get("prerequisites_any", []):
             if not isinstance(group, list) or not group or not all(item in tasks for item in group):
                 error(f"tasks.{name}.prerequisites_any 必须引用已定义任务")
                 continue
-            target_stacks = set(task.get("allowed_stacks") or KNOWN_STACKS)
-            for stack in target_stacks:
-                if not any(stack in set((tasks[item] or {}).get("allowed_stacks") or KNOWN_STACKS) for item in group):
-                    error(f"tasks.{name}.prerequisites_any 在 stack={stack} 无可达前置")
+            target_types = set(task.get("allowed_project_types") or PROJECT_TYPES)
+            for project_type in target_types:
+                if not any(
+                    project_type in set((tasks[item] or {}).get("allowed_project_types") or PROJECT_TYPES)
+                    for item in group
+                ):
+                    error(f"tasks.{name}.prerequisites_any 在 project_type={project_type} 无可达前置")
         external = task.get("external_evidence")
         if external is not None and (
             not isinstance(external, dict)

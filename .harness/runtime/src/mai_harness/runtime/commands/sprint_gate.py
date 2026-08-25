@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from mai_harness.runtime.application.action_executor import action_argv, execute_action
+from mai_harness.runtime.application.dependency_session import validate_session
 from mai_harness.runtime.application.sprint_context import (
     validate_sprint_activation,
     validate_sprint_context,
@@ -28,7 +29,8 @@ from mai_harness.runtime.application.task_evidence import (
 )
 from mai_harness.runtime.commands.validate_task_rules import validate as validate_rules
 from mai_harness.runtime.domain.actions import resolve_action
-from mai_harness.runtime.domain.sprint_context import table_rows
+from mai_harness.runtime.domain.modes import PROJECT_TYPES
+from mai_harness.runtime.domain.sprint_context import header_field, table_rows
 from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.harness_config import load_harness_config
@@ -36,36 +38,6 @@ from mai_harness.runtime.infrastructure.utils import load_yaml, try_run
 
 DONE = re.compile(r"^(done|完成|通过)$", re.I)
 ROLLBACK = re.compile(r"^(rollback|回退)$", re.I)
-KNOWN_STACKS = {"python-backend", "fullstack", "frontend"}
-TASK_KEYWORDS = sorted(
-    (
-        "product-acceptance",
-        "backend-design",
-        "frontend-design",
-        "sprint-close",
-        "test-case-gen",
-        "release-approval",
-        "release-prep",
-        "migration-design",
-        "promote-prep",
-        "build-image",
-        "promote-test",
-        "hotfix-init",
-        "back-merge",
-        "prod-deploy",
-        "observe",
-        "quality",
-        "integration",
-        "regression",
-        "design",
-        "product",
-        "infra",
-        "code",
-        "pr",
-    ),
-    key=len,
-    reverse=True,
-)
 
 
 @dataclass
@@ -118,8 +90,13 @@ def parse_task_statuses(content: str) -> dict[str, list[str]]:
     return statuses
 
 
-def task_keyword(text: str) -> str:
-    return next((key for key in TASK_KEYWORDS if key in str(text)), "")
+def task_keyword(text: str, task_names: list[str]) -> str:
+    value = str(text)
+    known = next((key for key in task_names if key in value), "")
+    if known:
+        return known
+    fallback = re.match(r"^([a-z][a-z0-9-]+)\b", value)
+    return fallback.group(1) if fallback else ""
 
 
 def task_status(keyword: str, content: str, statuses: dict[str, list[str]], result: GateResult) -> str:
@@ -261,12 +238,13 @@ def evaluate(
     if current_mode not in allowed_modes:
         result.blocked.append(f"任务 {task_type} 不允许用于 mode={current_mode}")
         return result
-    allowed_stacks = set(task.get("allowed_stacks") or {"python-backend", "fullstack", "frontend"})
-    current_stack = harness_config["project"].get("stack", "fullstack")
-    if current_stack not in allowed_stacks:
-        result.blocked.append(f"任务 {task_type} 不允许用于 stack={current_stack}")
+    allowed_project_types = set(task.get("allowed_project_types") or PROJECT_TYPES)
+    current_type = harness_config["project"].get("type", "fullstack")
+    if current_type not in allowed_project_types:
+        result.blocked.append(f"任务 {task_type} 不允许用于 project.type={current_type}")
         return result
     content = sprint_file.read_text(encoding="utf-8")
+    task_names = sorted((rules.get("tasks") or {}), key=len, reverse=True)
     task_rows = parse_task_rows(content)
     statuses = parse_task_statuses(content)
     type_capabilities = rules.get("sprint_type_task_capabilities") or {}
@@ -282,6 +260,11 @@ def evaluate(
             return result
         if sprint_type not in type_capabilities:
             result.blocked.append(f"未知 sprint_type={sprint_type}")
+            return result
+        current_type = harness_config["project"]["type"]
+        allowed_project_types = set((rules.get("sprint_type_project_types") or {}).get(sprint_type, []))
+        if allowed_project_types and current_type not in allowed_project_types:
+            result.blocked.append(f"sprint_type={sprint_type} 不允许用于 project.type={current_type}")
             return result
         if task_type not in type_capabilities[sprint_type]:
             result.blocked.append(f"任务 {task_type} 不允许用于 sprint_type={sprint_type}")
@@ -309,7 +292,8 @@ def evaluate(
             applicable = [
                 name
                 for name in declared
-                if current_stack in set((rules.get("tasks", {}).get(name) or {}).get("allowed_stacks") or KNOWN_STACKS)
+                if current_type
+                in set((rules.get("tasks", {}).get(name) or {}).get("allowed_project_types") or PROJECT_TYPES)
             ]
             if not applicable:
                 continue
@@ -341,7 +325,7 @@ def evaluate(
             if present and not satisfied:
                 result.blocked.append(f"前序阶段未完成({requirement}): {', '.join(present)}")
     for prerequisite in task.get("prerequisites", []):
-        keyword = task_keyword(prerequisite)
+        keyword = task_keyword(prerequisite, task_names)
         if keyword:
             # 类型序列没有包含的任务属于其他 Sprint；其结果应由本任务的输入/制品门禁验证，
             # 不能要求在当前 Sprint 重复执行。
@@ -392,7 +376,7 @@ def evaluate(
             spawned.extend(completed)
     upstream = list(
         dict.fromkeys(
-            [task_keyword(item) for item in task.get("prerequisites", []) if task_keyword(item)]
+            [task_keyword(item, task_names) for item in task.get("prerequisites", []) if task_keyword(item, task_names)]
             + satisfied_any
             + spawned
             + ([task["upstream_outcome"]["task"]] if task.get("upstream_outcome") else [])
@@ -609,6 +593,52 @@ def evaluate(
                     result.check(
                         contained.ok, f"signoff commit_sha 已抵达 {ref}", f"signoff commit_sha 未抵达 {ref}: {commit}"
                     )
+    if phase == "review" and task_type == "dependency-change":
+        sessions = []
+        state_root = root / ".harness/state/dependency-sessions"
+        for path in sorted(state_root.glob("*.json")) if state_root.exists() else []:
+            try:
+                item = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if item.get("consumer_task_id") == (task_id or task_type):
+                sessions.append((path, item))
+        result.check(
+            len(sessions) == 1,
+            "dependency-change 唯一 session 已登记",
+            f"dependency-change 需要且只能绑定一个 session，实际 {len(sessions)}",
+        )
+        if len(sessions) == 1:
+            path, session = sessions[0]
+            errors = validate_session(session)
+            result.check(not errors, f"dependency session 完整: {path}", f"dependency session 无效: {errors}")
+            result.check(
+                session.get("status") == "completed",
+                "dependency session 已完成",
+                f"dependency session 尚未完成: {session.get('status')}",
+            )
+    if phase == "review" and task_type == "library-contract":
+        session_id = header_field(content, "dependency_session")
+        result.check(bool(session_id), "Library Sprint 已绑定 dependency session", "缺少 dependency_session 输入")
+        if session_id:
+            state_path = root / ".harness/state/dependency-sessions/incoming" / f"{session_id}.json"
+            try:
+                session = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                result.blocked.append(f"消费者契约状态不可读取: {state_path}: {exc}")
+            else:
+                errors = validate_session(session)
+                result.check(not errors, "dependency session 摘要有效", f"dependency session 无效: {errors}")
+                result.check(
+                    session.get("provider_sprint") == sprint_id,
+                    "dependency session Provider Sprint 匹配",
+                    f"provider_sprint 不匹配: {session.get('provider_sprint')} != {sprint_id}",
+                )
+                result.check(
+                    session.get("status") == "consumer-verified",
+                    "消费者契约已通过",
+                    f"消费者契约尚未通过: {session.get('status')}",
+                )
     attempt_errors: list[str] = []
     if phase == "review":
         evidence_rules = rules_path or HarnessPaths.detect(project=root).rules / "task-rules.yml"

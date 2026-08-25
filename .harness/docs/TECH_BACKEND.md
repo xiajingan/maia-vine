@@ -15,10 +15,16 @@
 
 | 层 | 职责 | 禁止 |
 |----|------|------|
-| Controller | 接收请求、Pydantic/边界模型校验、调用 Service、返回响应 | 业务逻辑、数据库操作 |
+| Controller | 接收请求、Schema/边界模型校验、调用 Service、返回响应 | 业务逻辑、数据库操作 |
 | Service | 业务逻辑编排、事务控制 | 直接操作 HTTP Request/Response |
 | Repository | 数据库读写，封装项目选定 ORM/驱动 | 业务逻辑判断 |
-| DTO | 请求/响应数据结构（Pydantic Model 或架构指定的等价 Python 类型） | 运行时逻辑 |
+| DTO | 请求/响应数据结构（使用架构指定的语言类型或 Schema） | 运行时逻辑 |
+
+## 公共能力归属门禁
+
+技术方案必须先判断新增重试策略、公共事件、错误码、上下文传播、协议模型等能力是项目私有还是跨消费者公共能力。若 `ARCHITECTURE.md` 的依赖矩阵已登记 library Provider，方案必须依赖该包；不得在消费工程内重新实现或复制一份。需要扩展 Provider 时，明确写出 capability ID、Provider 工程、同步 `dependency-change` 或异步 Assignment 路线、消费者契约命令与精确版本锁定方式。
+
+只有不含跨工程语义、不会被第二个消费者复用的业务内 helper 才允许留在本工程 `shared/common`。技术方案缺少能力归属结论时，`backend-design` 不得通过 Review。
 
 ## API 设计
 
@@ -38,7 +44,7 @@
 
 ## 错误处理
 
-- 统一 Python 错误码和项目异常基类，由框架全局异常处理器转换为安全响应
+- 统一错误码和项目异常抽象，由应用全局异常处理器转换为安全响应
 
 > 安全设计详见 [CODING_BACKEND.md](CODING_BACKEND.md) 安全章节（JWT/RBAC/输入验证/Rate Limiting 等）
 
@@ -70,17 +76,19 @@
 6. **缓存/队列**：Redis Key + MQ topic（如涉及）→ 缓存设计
 7. **性能设计**：慢查询/索引/并发策略
 8. **安全设计**：权限/校验/敏感数据 → CODING_BACKEND.md
+9. **依赖与能力归属**：公共/私有判定、Provider capability、协作路线、消费者契约与版本锁定；不涉及时写明理由
 
 ---
 
 ## AI 执行协议
 
-**允许工具**：文件读写/搜索、explore 子代理、Python 后端最佳实践 | **禁止**：bash 执行、代码修改
+**允许工具**：文件读写/搜索、explore 子代理、项目语言对应的后端最佳实践 | **禁止**：bash 执行、代码修改
 
 > **知行合一**：技术方案须结合框架最佳实践验证可行性。
 
 **自检清单**：
-- 分层正确（Controller→Service→Repository）、接口含 Pydantic/边界 Schema + 错误码
+- 分层正确（Controller→Service→Repository）、接口含架构指定的边界 Schema + 错误码
 - 数据模型迁移定义、无外键、慢查询有索引
 - 缓存 Key 命名规范 + TTL、异常用统一错误码无 stack trace
 - 写操作幂等、外部 API 有重试策略
+- 公共能力未在消费工程内重复实现；Provider 变更已声明 dependency session 或 Assignment 及消费者契约

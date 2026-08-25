@@ -22,6 +22,10 @@ from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.harness_config import load_harness_config
+from mai_harness.runtime.infrastructure.technology_config import (
+    load_technology_config,
+    validate_technology_capabilities,
+)
 from mai_harness.runtime.infrastructure.utils import load_yaml
 
 
@@ -62,8 +66,22 @@ def init_sprint(root: Path, sprint_id: str, sprint_type: str, *, offline: bool =
         raise ValueError("Sprint ID 必须使用 sprint-N-name 格式")
     paths = HarnessPaths.detect(project=root)
     rules = load_yaml(paths.rules / "task-rules.yml")
-    policy = sprint_policy(rules, sprint_type)
     config = load_harness_config(force=True, path=root / "config/harness.yml")
+    technology = load_technology_config(
+        path=root / "config/technology.yml",
+        defaults_path=paths.framework_config / "technology.defaults.yml",
+    )
+    mode = config["project"]["mode"]
+    project_type = config["project"]["type"]
+    allowed_types = set((rules.get("sprint_type_mode_capabilities") or {}).get(mode, []))
+    if sprint_type not in allowed_types:
+        raise ValueError(f"project.mode={mode} 不允许 Sprint 类型 {sprint_type}")
+    allowed_project_types = set((rules.get("sprint_type_project_types") or {}).get(sprint_type, []))
+    if project_type not in allowed_project_types:
+        raise ValueError(f"Sprint 类型 {sprint_type} 不允许 project.type={project_type}")
+    if mode != "control" and (errors := validate_technology_capabilities(technology, config, root)):
+        raise ValueError("技术栈能力未就绪:\n- " + "\n- ".join(errors))
+    policy = sprint_policy(rules, sprint_type)
     remote, base_branch, base_ref = remote_base(config, policy)
     if not offline:
         run(root, "git", "fetch", "--no-tags", remote, base_branch)

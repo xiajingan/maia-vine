@@ -6,7 +6,7 @@
 # review_spec = Step 3 额外加载的审查规范（可选），与 acceptance 条件共同使用。
 # REVIEW FAIL → 回到 Step 1 重新规划。
 
-version: "1.6"
+version: "1.7"
 
 # ─── Sprint 级 Preflight ─────────────────────────────────────────────────────
 # Sprint 计划确认后、第一个任务执行前执行一次。失败时 ask_user 引导修复。
@@ -18,32 +18,43 @@ sprint_preflight:
 
 # 单一任务权限矩阵。未登记任务默认拒绝，避免新增任务失败开放。
 mode_task_capabilities:
-  standalone: [infra, product, design, backend-design, frontend-design, code, test-case-gen, quality, pr, product-acceptance, sprint-close, observe, promote-prep, build-image, promote-test, integration, release-prep, migration-design, regression, release-approval, prod-deploy, hotfix-init, back-merge]
-  managed: [infra, product, design, backend-design, frontend-design, code, test-case-gen, quality, pr, product-acceptance, sprint-close]
+  standalone: [infra, product, design, backend-design, frontend-design, dependency-change, code, test-case-gen, quality, pr, product-acceptance, sprint-close, library-design, library-code, library-contract, library-quality, library-package, library-delivery, library-close, library-pr, observe, promote-prep, build-image, promote-test, integration, release-prep, migration-design, regression, release-approval, prod-deploy, hotfix-init, back-merge]
+  managed: [infra, product, design, backend-design, frontend-design, dependency-change, code, test-case-gen, quality, pr, product-acceptance, sprint-close, library-design, library-code, library-contract, library-quality, library-package, library-delivery, library-close, library-pr]
   control: [managed-project-check, assignment-dispatch, assignment-status, delivery-verify, release-compose, test-deploy, test-integration, integration-finding, release-promote, release-rollback]
 
 # Sprint 类型与任务能力矩阵。Sprint 计划必须显式声明 `sprint_type:`；未登记类型和任务默认拒绝。
 sprint_type_task_capabilities:
-  feature-sprint: [infra, product, design, backend-design, frontend-design, code, test-case-gen, quality, pr, product-acceptance, sprint-close]
+  feature-sprint: [infra, product, design, backend-design, frontend-design, dependency-change, code, test-case-gen, quality, pr, product-acceptance, sprint-close]
   deploy-sprint-test: [promote-prep, build-image, promote-test, integration]
   deploy-sprint-prod: [release-prep, migration-design, regression, release-approval, prod-deploy, back-merge, observe]
   hotfix: [hotfix-init, code, quality, prod-deploy, back-merge, observe]
   control: [managed-project-check, assignment-dispatch, assignment-status, delivery-verify, release-compose, test-deploy, test-integration, integration-finding, release-promote, release-rollback]
-  maintenance: [infra, code, test-case-gen, quality, product-acceptance, pr, sprint-close]
+  maintenance: [infra, dependency-change, code, test-case-gen, quality, product-acceptance, pr, sprint-close]
+  library-sprint: [library-design, library-code, library-contract, library-quality, library-package, library-delivery, library-close, library-pr]
 
 # 流程顺序真源。任务必须按阶段递增；同一阶段可并行或按条件选择，未列入当前 Sprint 的可选任务不构成前置。
 sprint_type_sequences:
-  feature-sprint: [{tasks: [infra]}, {tasks: [product]}, {tasks: [design]}, {tasks: [backend-design, frontend-design], require: all}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close]}, {tasks: [pr]}]
+  feature-sprint: [{tasks: [infra]}, {tasks: [product]}, {tasks: [design]}, {tasks: [backend-design, frontend-design], require: all}, {tasks: [dependency-change], optional: true}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close]}, {tasks: [pr]}]
   deploy-sprint-test: [{tasks: [promote-prep]}, {tasks: [build-image]}, {tasks: [promote-test]}, {tasks: [integration]}]
   deploy-sprint-prod: [{tasks: [release-prep]}, {tasks: [migration-design, regression], require: all}, {tasks: [release-approval]}, {tasks: [prod-deploy]}, {tasks: [back-merge]}, {tasks: [observe]}]
   hotfix: [{tasks: [hotfix-init]}, {tasks: [code]}, {tasks: [quality]}, {tasks: [prod-deploy]}, {tasks: [back-merge]}, {tasks: [observe]}]
   control: [{tasks: [managed-project-check]}, {tasks: [assignment-dispatch]}, {tasks: [assignment-status]}, {tasks: [delivery-verify]}, {tasks: [release-compose]}, {tasks: [test-deploy]}, {tasks: [test-integration]}, {tasks: [integration-finding, release-promote], require: any}, {tasks: [release-rollback]}]
-  maintenance: [{tasks: [infra]}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close]}, {tasks: [pr]}]
+  maintenance: [{tasks: [infra]}, {tasks: [dependency-change], optional: true}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close]}, {tasks: [pr]}]
+  library-sprint: [{tasks: [library-design]}, {tasks: [library-code]}, {tasks: [library-quality]}, {tasks: [library-package]}, {tasks: [library-contract]}, {tasks: [library-delivery]}, {tasks: [library-close]}, {tasks: [library-pr]}]
 
 sprint_type_mode_capabilities:
-  standalone: [feature-sprint, deploy-sprint-test, deploy-sprint-prod, hotfix, maintenance]
-  managed: [feature-sprint, maintenance]
+  standalone: [feature-sprint, deploy-sprint-test, deploy-sprint-prod, hotfix, maintenance, library-sprint]
+  managed: [feature-sprint, maintenance, library-sprint]
   control: [control]
+
+sprint_type_project_types:
+  feature-sprint: [backend, fullstack, frontend]
+  deploy-sprint-test: [backend, fullstack, frontend]
+  deploy-sprint-prod: [backend, fullstack, frontend]
+  hotfix: [backend, fullstack, frontend]
+  control: [backend, fullstack, frontend]
+  maintenance: [backend, fullstack, frontend]
+  library-sprint: [library]
 
 # Sprint 生命周期策略真源。Runtime 根据该策略和 Git 实际状态创建、检查工作区；
 # Feature/Maintenance/Hotfix 不允许退回当前 HEAD 或主工作区执行。
@@ -54,6 +65,7 @@ sprint_type_policies:
   deploy-sprint-test: {worktree: forbidden, base: development, branch_prefix: ""}
   deploy-sprint-prod: {worktree: forbidden, base: test, branch_prefix: ""}
   control: {worktree: forbidden, base: development, branch_prefix: ""}
+  library-sprint: {worktree: required, base: development, branch_prefix: "library/"}
 
 # ─── 任务类型规则 ───────────────────────────────────────────────
 
@@ -150,7 +162,7 @@ tasks:
     label: "环境搭建"
     spec: "ARCHITECTURE.md"
     gate: L1  # 仅通知
-    allowed_stacks: [python-backend, fullstack, frontend]
+    allowed_project_types: [backend, fullstack, frontend]
     tools:
       allow: [file-rw, search, bash, sub-agent]
       deny: [modify-specs]
@@ -159,10 +171,10 @@ tasks:
       path: "项目根目录"
       artifacts: ["项目骨架", "CI/CD 配置", "Docker 配置"]
     acceptance: ["项目脚手架与 ARCHITECTURE.md 一致"]
-    acceptance_by_stack:
-      python-backend: ["Python 构建、Ruff、Python 架构检查和单元测试通过；项目配置 typecheck 时必须通过"]
-      fullstack: ["Python 后端与 TypeScript 前端构建、lint、类型检查和测试通过"]
-      frontend: ["TypeScript 前端构建、lint、类型检查和测试通过"]
+    acceptance_by_project_type:
+      backend: ["config/harness.yml 登记的后端构建、lint、类型检查和单元测试通过"]
+      fullstack: ["config/technology.yml 对应的前后端必需命令全部可执行并通过"]
+      frontend: ["config/technology.yml 对应的前端必需命令全部可执行并通过"]
 
   product:
     label: "产品设计"
@@ -186,7 +198,7 @@ tasks:
     spec: "DESIGN.md"
     specs: ["DESIGN.md", "UI_DESIGN_SYSTEM.md"]  # H-21: plan/exec 应同时加载视觉规范单一源
     gate: L1  # 仅通知（Review 已保障质量）
-    allowed_stacks: [fullstack, frontend]
+    allowed_project_types: [fullstack, frontend]
     tools:
       allow: [file-rw, search, explore, frontend-design, canvas-design]
       deny: [bash, modify-code]
@@ -208,9 +220,9 @@ tasks:
     label: "后端技术方案"
     spec: "TECH_BACKEND.md"
     gate: L1
-    allowed_stacks: [python-backend, fullstack]
+    allowed_project_types: [backend, fullstack]
     tools:
-      allow: [file-rw, search, explore, python-backend-best-practices]
+      allow: [file-rw, search, explore]
       deny: [bash, modify-code]
     prerequisites: ["product 完成"]
     outputs:
@@ -218,18 +230,18 @@ tasks:
       artifacts: ["后端技术方案"]
       index: "docs/tech-docs/index.md"
     acceptance:
-      - "8 章节齐全"
+      - "9 章节齐全（含依赖与能力归属）"
       - "分层正确（Controller→Service→Repository）"
-      - "接口含 Pydantic Schema（或 ARCHITECTURE.md 明确的等价边界模型）+ 错误码"
+      - "接口含 ARCHITECTURE.md 指定的边界模型与错误码"
 
   frontend-design:
     label: "前端技术方案"
     spec: "TECH_FRONTEND.md"
-    specs: ["TECH_FRONTEND.md", "UI_DESIGN_SYSTEM.md"]  # 栈基线与 token 体系单一源
+    specs: ["TECH_FRONTEND.md", "UI_DESIGN_SYSTEM.md"]
     gate: L1
-    allowed_stacks: [fullstack, frontend]
+    allowed_project_types: [fullstack, frontend]
     tools:
-      allow: [file-rw, search, explore, vue-best-practices]
+      allow: [file-rw, search, explore]
       deny: [bash, modify-code]
     prerequisites: ["design 完成"]
     outputs:
@@ -238,9 +250,9 @@ tasks:
       index: "docs/tech-docs/index.md"
     acceptance:
       - "7 章节齐全"
-      - "组件全部 Composition API"
+      - "组件模式与 config/technology.yml 声明的框架一致"
       - "性能满足约束（LCP < 2s）"
-      - "技术栈与 UI_DESIGN_SYSTEM.md §1 基线一致（Vue3+Vite+Tailwind v4+Pinia+vue-router+vue-i18n）"
+      - "技术栈与 config/technology.yml 及 UI_DESIGN_SYSTEM.md 基线一致"
 
   code:
     label: "代码生成"
@@ -249,9 +261,9 @@ tasks:
     specs-frontend: ["CODING_FRONTEND.md", "UI_DESIGN_SYSTEM.md"]  # 前端实现需 token 与组件模式
     review_spec: "CODE_REVIEW.md"  # Step 3 REVIEW 额外加载此规范做 6 维代码评审
     gate: L1
-    allowed_stacks: [python-backend, fullstack, frontend]
+    allowed_project_types: [backend, fullstack, frontend]
     tools:
-      allow: [file-rw, search, bash, sub-agent, vue-best-practices, fastify-best-practices, drizzle-orm, chrome-devtools, webapp-testing]
+      allow: [file-rw, search, bash, sub-agent, chrome-devtools, webapp-testing]
       deny: [modify-specs]
     infra_action: project.verify.preflight
     outputs:
@@ -261,10 +273,129 @@ tasks:
       - "覆盖率 ≥ 80%"
       - "harness verify health 通过"
       - "Step 3 代码评审：6 维全检，0 Critical + 0 Major + Minor ≤ 5"
-    acceptance_by_stack:
-      python-backend: ["Ruff、Python 架构检查和 Python 单元/集成测试通过；项目配置 typecheck 时必须通过"]
-      fullstack: ["Python 后端与 TypeScript 前端检查通过", "新增或变更用户链路有 tests/e2e 场景且 Playwright 通过", "前端 UI Contract、Token 和 prototype-parity 门禁通过"]
-      frontend: ["TypeScript lint、类型检查和单元测试通过", "新增或变更用户链路有 tests/e2e 场景且 Playwright 通过", "UI Contract、Token 和 prototype-parity 门禁通过"]
+    acceptance_by_project_type:
+      backend: ["config/harness.yml 登记的后端静态检查、单元测试和集成测试通过"]
+      fullstack: ["config/technology.yml 对应的前后端必需命令通过", "新增或变更用户链路的项目级 E2E 命令通过", "前端 UI Contract、Token 和 prototype-parity 门禁通过"]
+      frontend: ["config/technology.yml 对应的前端必需命令通过", "新增或变更用户链路的项目级 E2E 命令通过", "UI Contract、Token 和 prototype-parity 门禁通过"]
+
+  dependency-change:
+    label: "同步公共依赖迭代"
+    spec: "ASSIGNMENTS.md"
+    gate: L1
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
+    allowed_project_types: [backend, fullstack, frontend]
+    tools: {allow: [file-rw, search, bash], deny: [copy-provider-source, floating-artifact]}
+    prerequisites: []
+    outputs: {path: ".harness/state/dependency-sessions/", artifacts: ["已完成的 coordinated dependency session"]}
+    acceptance:
+      - "Provider 在独立 worktree 和 Library Sprint 中完成"
+      - "不可变 package candidate 通过消费者契约"
+      - "Delivery、精确锁文件与 adoption 证据一致"
+
+  library-design:
+    label: "公共包技术方案"
+    spec: "TECH_LIBRARY.md"
+    gate: L1
+    allowed_project_types: [library]
+    tools: {allow: [file-rw, search, explore], deny: [modify-code]}
+    prerequisites: []
+    outputs: {path: "docs/tech-docs/", artifacts: ["公共 API、兼容策略与消费者矩阵"]}
+    acceptance:
+      - "能力 ID、公共/业务边界、版本兼容与废弃策略明确"
+      - "受影响消费者及其契约命令完整登记"
+      - "不包含任一消费者的业务语义"
+
+  library-code:
+    label: "公共包实现"
+    spec-backend: "CODING_BACKEND.md"
+    review_spec: "CODE_REVIEW.md"
+    gate: L1
+    allowed_project_types: [library]
+    tools: {allow: [file-rw, search, bash, sub-agent], deny: [modify-specs]}
+    infra_action: project.verify.preflight
+    outputs: {path: "src/", artifacts: ["公共包源码", "单元测试"]}
+    acceptance:
+      - "静态检查、类型检查和单元测试通过"
+      - "公共 API 与 library-design 一致"
+      - "0 Critical + 0 Major"
+
+  library-contract:
+    label: "公共包契约验证"
+    spec: "CODE_REVIEW.md"
+    gate: L1
+    execution_protocol: orchestrator
+    review_protocol: artifact-only
+    allowed_project_types: [library]
+    tools: {allow: [file-rw, search, bash], deny: [modify-specs]}
+    prerequisites: ["library-package 完成"]
+    outputs: {path: ".harness/state/dependency-sessions/incoming/", artifacts: ["受影响消费者契约证据"]}
+    acceptance:
+      - "Library 单元/公共 API 检查已在 code 与 quality 阶段通过"
+      - "当前 session 的消费者 contract 通过"
+      - "破坏性变更已升级 major 或被拒绝"
+
+  library-quality:
+    label: "公共包质量"
+    spec: "QUALITY_SCORE.md"
+    gate: L1
+    entry_action: project.quality.score
+    allowed_project_types: [library]
+    tools: {allow: [file-rw, search, bash], deny: [modify-specs]}
+    prerequisites: ["library-code 完成"]
+    infra_action: project.verify.preflight
+    outputs: {path: "docs/test-reports/", artifacts: ["质量评分报告"]}
+    acceptance:
+      - "项目 command_groups.precommit 通过"
+      - "覆盖率达到项目阈值"
+
+  library-package:
+    label: "公共包构建"
+    gate: L1
+    entry_action: project.library.package
+    allowed_modes: [standalone, managed]
+    allowed_project_types: [library]
+    tools: {allow: [file-rw, search, bash], deny: [modify-specs, floating-artifact]}
+    prerequisites: ["library-quality 完成"]
+    outputs: {path: "dist/", artifacts: ["Build Once package、版本和 SHA-256"]}
+    acceptance:
+      - "package 由当前完整 Git commit 构建一次"
+      - "版本、源码 commit 和 SHA-256 已写入 library-packages 状态证据"
+
+  library-delivery:
+    label: "公共包交付"
+    gate: L1
+    artifact_action: project.library.delivery.guard
+    allowed_modes: [managed, standalone]
+    allowed_project_types: [library]
+    tools: {allow: [file-rw, artifact-store], deny: [modify-code, floating-artifact]}
+    prerequisites: ["library-contract 完成"]
+    outputs: {path: "docs/deliveries/", artifacts: ["不可变 dependency-package Delivery"]}
+    acceptance:
+      - "Delivery 绑定全部被满足的 Assignment 或 dependency session 摘要"
+      - "供应链验证 receipt 有效"
+
+  library-close:
+    label: "公共包 Sprint 归档"
+    spec: "SPRINT.md"
+    gate: L1
+    allowed_project_types: [library]
+    tools: {allow: [file-rw, search, bash], deny: [modify-code]}
+    prerequisites: ["library-delivery 完成"]
+    outputs: {path: "docs/exec-plans/completed/", artifacts: ["已归档 Library Sprint"]}
+    acceptance: ["全部 Library 任务完成且 Sprint 计划已归档"]
+
+  library-pr:
+    label: "公共包合并请求"
+    gate: L1
+    allowed_modes: [managed, standalone]
+    allowed_project_types: [library]
+    tools: {allow: [file-rw, search, bash], deny: [modify-code, modify-specs]}
+    prerequisites: ["library-close 完成"]
+    outputs: {path: "PR URL", artifacts: ["Library PR"]}
+    acceptance:
+      - "PR/MR 通过 harness pr-adapter 创建"
+      - "远端 CI 与分支保护通过"
 
   test-case-gen:
     label: "测试用例生成"
@@ -304,11 +435,11 @@ tasks:
       index: "docs/test-reports/index.md"
     acceptance:
       - "entry_action 退出码 = 0（总分 ≥ 95）"
-      - "7 个评分维度全部执行；不适用维度按当前 stack 规则处理"
+      - "7 个评分维度全部执行；不适用维度按当前 project.type 规则处理"
       - "报告文件为 <N-name>-quality.md（非时间戳命名；<N-name> 已含 sprint- 前缀）"
       - "Performance baseline 达标"
-    acceptance_by_stack:
-      python-backend: ["API 单元/集成、服务健康和 coverage.py 证据完整"]
+    acceptance_by_project_type:
+      backend: ["API 单元/集成、服务健康和项目登记的覆盖率证据完整"]
       fullstack: ["Playwright E2E 与 UI 还原度三项门禁通过", "截图和真实链路证据（若存在）已记录"]
       frontend: ["Playwright E2E 与 UI 还原度三项门禁通过", "截图和真实链路证据（若存在）已记录"]
     completion_checks:
@@ -336,10 +467,10 @@ tasks:
       - "PR 描述包含：变更摘要、关联 User Story、测试结果、截图（前端）"
       - "config/harness.yml command_groups.precommit 与项目构建命令全部通过"
       - "合并后 sprint 分支已抵达目标远端 ref；Review Gate 通过后再从主工作区安全清理 worktree"
-    acceptance_by_stack:
-      python-backend: ["Ruff、Python 架构检查、pytest 与 Python 构建通过；项目配置 typecheck 时必须通过"]
-      fullstack: ["Python 后端与 TypeScript 前端全量检查、构建和 Playwright 通过"]
-      frontend: ["TypeScript lint、类型检查、测试、构建和 Playwright 通过"]
+    acceptance_by_project_type:
+      backend: ["项目登记的后端 lint、类型检查、测试与构建命令通过"]
+      fullstack: ["config/technology.yml 对应的前后端全量检查、构建和 E2E 通过"]
+      frontend: ["config/technology.yml 对应的前端检查、测试、构建和 E2E 通过"]
     manual_steps:
       - "Agent 使用 harness pr-adapter create 构造 PR/MR；GitLab push-options fallback 只能由 pr-adapter 内部封装，不得在任务中绕过适配器"
       - "缺少 GitLab CLI/CI 时，Agent 必须输出 MR URL + 本地全量检查证据，等待用户在 GitLab 手动确认"
@@ -372,8 +503,8 @@ tasks:
       - "走查指南已生成（<N-name>-walkthrough.md），含环境信息 + 设计对照 + 逐步操作 + 预期结果 + 截图占位"
       - "走查报告已生成（<N-name>-acceptance.md），用于记录 Boss 实际结果与结论"
       - "Boss signoff 已生成（<N-name>-boss-signoff.yml），decision=approved 且 commit_sha 指向当前交付提交"
-    acceptance_by_stack:
-      python-backend: ["API 主路径、异常路径、权限和持久化验收完整"]
+    acceptance_by_project_type:
+      backend: ["API 主路径、异常路径、权限和持久化验收完整"]
       fullstack: ["4 维 UI 走查完整", "prototype-vs-live 截图、版式和跨页持久化检查完整"]
       frontend: ["4 维 UI 走查完整", "prototype-vs-live 截图与版式检查完整"]
     blocking: "product-acceptance Review PASS 后 → 编排者使用 ask_user 阻塞等待 Boss 确认，并执行 harness acceptance-record approve|reject <N-name> 固化结果"
@@ -680,7 +811,7 @@ spawn_rules:
 
   - from: product
     to: [design, backend-design, frontend-design]
-    condition: "按 project.stack 派生适用设计；fullstack 固定执行 UI、后端和前端方案"
+    condition: "按 project.type 派生适用设计；fullstack 固定执行 UI、后端和前端方案"
   - from: design
     to: [frontend-design]
     condition: "design 完成"

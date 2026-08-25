@@ -3,7 +3,7 @@ version: 2
 project:
   id: project-local
   mode: standalone
-  stack: fullstack
+  type: fullstack
   deployment_owner: self
 
 agent_runtime:
@@ -30,9 +30,11 @@ commands:
   architecture: ["{harness}", python-architecture-lint]
   unit: ["{python}", -m, pytest, -q]
   integration: []
+  # Python Library 的条件化 package 构建示例；其他包生态必须按项目覆盖。
+  package_build: [uv, build]
   frontend_lint: [pnpm, exec, eslint, .]
   frontend_typecheck: [pnpm, exec, tsc, --noEmit]
-  frontend_unit: []
+  frontend_unit: [pnpm, test:unit]
   e2e: [pnpm, test:e2e]
 
 command_groups:
@@ -40,9 +42,14 @@ command_groups:
   precommit: [format_check, lint, typecheck, architecture, frontend_lint, frontend_typecheck, unit]
 
 command_conditions:
+  lint: {file_exists: pyproject.toml}
+  format_check: {file_exists: pyproject.toml}
+  architecture: {file_exists: pyproject.toml}
+  unit: {file_exists: pyproject.toml}
+  package_build: {file_exists: pyproject.toml}
   frontend_lint: {file_exists: package.json, package_dependencies: [eslint]}
   frontend_typecheck: {file_exists: package.json, package_dependencies: [typescript]}
-  frontend_unit: {file_exists: package.json}
+  frontend_unit: {file_exists: package.json, package_scripts: [test:unit]}
   e2e: {file_exists: package.json, package_dependencies: ["@playwright/test"], package_scripts: [test:e2e]}
 
 python_architecture:
@@ -85,6 +92,9 @@ automation:
 
 delivery:
   remote: origin
+  manifests_dir: docs/deliveries
+  # Standalone Library 发布前必须配置真实 verifier；Managed 继续使用 management 同名字段。
+  supply_chain_verification_commands: []
   branches:
     dev: ["^develop$", "^sprint/", "^promote/", "^feature/"]
     test: ["^test$", "^promote/", "^release/", "^hotfix/"]
@@ -108,6 +118,10 @@ verification:
   env_file: .env
   required_env_vars: []
   db_min_tables: 0
+
+# 跨工程公共包登记。coordinated 由消费者 Sprint 同步启动 Library Sprint；assignment 保持异步纳入。
+dependencies:
+  providers: {}
 
 quality:
   threshold: 95

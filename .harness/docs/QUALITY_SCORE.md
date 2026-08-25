@@ -38,7 +38,7 @@ uv run --project .harness/runtime harness quality-score --sprint 5-mock-adapter 
 
 ### 覆盖率
 
-业务代码覆盖率从 `--coverage-dir` 读取：Python 使用 coverage.py JSON（`coverage.json` 的 `totals.percent_covered`），TypeScript 使用 `coverage-summary.json`。生成方式由 `config/harness.yml.commands.unit` 和项目测试配置决定，不在 Harness 中硬编码包管理器。
+业务代码覆盖率从 `--coverage-dir` 读取。任意语言可输出统一的 `harness-coverage.json`（`{"percent": 80.0}`）；同时兼容 coverage.py 的 `coverage.json` 与 TypeScript 的 `coverage-summary.json`。生成方式由 `config/harness.yml.commands.unit` 和项目测试配置决定，Harness 不绑定语言或包管理器。
 
 业务模块（如 `src/services/`、`src/modules/`、`src/providers/`、`src/shared/`、`src/plugins/`、`src/routes/`、`web/src/`）：**statements ≥ 80%**
 
@@ -124,7 +124,7 @@ E2E 测试前必须完成全栈环境启动。启动管理使用 `uv run --proje
 
 ## 完成标准（DoD）
 
-- 7 个评分维度全部计算（按 stack 不适用的维度使用代码定义的 N/A 语义）
+- 7 个评分维度全部计算（按 `project.type` 不适用的维度使用代码定义的 N/A 语义）
 - 总分 ≥ 95
 - 报告已保存至 `docs/test-reports/sprint-N-quality.md`
 - 报告包含各维度实际检查结果；更细的截图、HTML report 和用例清单由对应测试产物保存并作为 Review artifact 绑定

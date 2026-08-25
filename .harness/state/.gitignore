@@ -3,6 +3,8 @@
 *.log
 tasks/
 sprints/
+dependency-sessions/
+library-packages/
 !.gitignore
 !README.md
 !harness-version.txt

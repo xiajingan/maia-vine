@@ -50,6 +50,20 @@ ACTIONS = {
     "project.quality.score": Action(
         ("quality-score", "--sprint", "{sprint}"), "Sprint 质量评分", EXECUTE, effect="write"
     ),
+    "project.library.package": Action(
+        ("library-package", "--sprint", "{sprint}"),
+        "构建 Library 不可变候选包",
+        EXECUTE,
+        frozenset({"standalone", "managed"}),
+        "write",
+        900,
+    ),
+    "project.library.delivery.guard": Action(
+        ("dependency", "provider-delivery-guard", "--sprint", "{sprint}"),
+        "校验 Library Delivery、session 与供应链证据",
+        REVIEW,
+        frozenset({"standalone", "managed"}),
+    ),
     "project.acceptance.guard": Action(
         ("acceptance-record", "lint", "{sprint}", "--require-signoff", "--require-approved"),
         "验收记录门禁",

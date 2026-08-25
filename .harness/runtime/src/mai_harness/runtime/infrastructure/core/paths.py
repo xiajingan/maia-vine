@@ -69,7 +69,7 @@ class HarnessPaths:
 
     @property
     def framework_config(self) -> Path:
-        return self.project / ".harness/config" if self.installed else self.runtime / "config"
+        return self.project / ".harness/framework" if self.installed else self.runtime / "config"
 
     @property
     def schemas(self) -> Path:
@@ -80,7 +80,7 @@ class HarnessPaths:
         return self.project / ".harness/state"
 
     @property
-    def legacy_project_config(self) -> Path:
+    def legacy_framework_config(self) -> Path:
         return self.project / ".harness/config"
 
     @property

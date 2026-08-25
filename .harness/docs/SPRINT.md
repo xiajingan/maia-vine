@@ -6,6 +6,7 @@
 > - `docs/SPRINT.md`：Sprint / deploy-sprint 的流程与编排协议
 > - `.harness/rules/task-rules.yml`：任务类型、工具边界、门控、产出物、验收条件、派生规则（机械执行真源）
 > - `config/harness.yml`：项目级流程开关（走查环境、质量阈值、部署模式、UI L3）
+> - `config/technology.yml`：技术栈、组件 manifest 与必需命令能力
 > - `docs/CICD.md`：CI/CD why-only 红线、分支/环境策略、故障速查；不定义 Sprint 流程
 
 **核心原则：Sprint = PR 级别交付单元。** 每个 Sprint 聚焦单一可交付增量，粒度对齐一个 PR。
@@ -14,7 +15,7 @@
 
 ## Sprint 启动协议
 
-先执行 `harness sprint init sprint-N-name --type <feature-sprint|maintenance|hotfix|deploy-sprint-test|deploy-sprint-prod|control>`。Runtime 从 `delivery.remote/refs` 解析并刷新远端基线；Feature、Maintenance、Hotfix 同时创建 linked worktree，禁止回退到当前 HEAD 或主工作区。计划确认后执行 `harness sprint activate <plan>`，再由第一个任务的 Step 0 触发环境验证。
+先执行 `harness sprint init sprint-N-name --type <feature-sprint|maintenance|library-sprint|hotfix|deploy-sprint-test|deploy-sprint-prod|control>`。Runtime 在创建任何文件前同时校验 `project.mode` 与 `project.type`；`library-sprint` 仅允许 `type: library`，产品/部署 Sprint 只允许 backend/fullstack/frontend。Runtime 从 `delivery.remote/refs` 解析并刷新远端基线；Feature、Maintenance、Library、Hotfix 同时创建 linked worktree，禁止回退到当前 HEAD 或主工作区。计划确认后执行 `harness sprint activate <plan>`，再由第一个任务的 Step 0 触发环境验证。
 
 ### 启动检查
 
@@ -175,7 +176,7 @@ REVIEW FAIL 时，任务进入重试循环（默认最多重试 2 次，不含�
 **迭代完成校验**（闭环前逐项确认）：
 1. 全部任务状态为 `done`（无 `pending`/`blocked`/`in-progress`）
 2. L3 门控任务已获用户通过 `ask_user` 工具明确确认（`通过`/`approved`），且已生成 `sprint-N-boss-signoff.yml`
-3. `config/harness.yml` 当前 stack 全量检查与构建通过 + 质量评分 ≥ 95 + 产品走查通过
+3. `config/technology.yml` 对应必需命令全量通过 + 质量评分 ≥ 95 + 产品走查通过
 4. 产出物文件**物理存在**：`docs/acceptance-reports/sprint-N-acceptance.md` + `sprint-N-walkthrough.md` + `sprint-N-boss-signoff.yml`
 
 ### 手动 PR 工作流
@@ -225,6 +226,12 @@ Control 仍使用统一 Sprint 编排，不建立独立命令式工作流。用�
 | 发布 | `release-promote`；失败时 `integration-finding` 或 `release-rollback` |
 
 `assignment-dispatch` 从 Control `USER_STORIES.md` 的 Story 派生 `product` 或 `architecture` Assignment，并以 `source_reference` 保留追溯；消费工程也可从本地 Story/Task 派生 `dependency` Assignment。用户无需先手写 JSON 或直接运行 CLI。CLI 是 Skill/Agent 在 Step 0/2 调用的稳定执行端口，CI/Lint 是验证门禁，Commit/PR 是任务产物，均不是与 Sprint 并列的入口。Assignment 只写需求输入，不创建目标工程代码任务，也不修改其 Sprint 状态。
+
+### Library Sprint 与同步依赖任务
+
+`project.type: library` 的工程仍使用 Harness，但只运行公共 API、兼容性、包质量、不可变交付和 PR 闭环，不承担产品走查与环境部署。任务顺序的机械真源是 `task-rules.yml.library-sprint`。
+
+消费工程 Sprint 需要同步修改公共包时，必须先在技术方案中把能力归属到已登记 Provider，再增加 `dependency-change` 任务。该任务通过 `harness dependency` 启动 Provider 的独立 Library Sprint、接收 Build Once candidate、执行消费方契约、验证 Delivery 和供应链 receipt，并检查消费工程锁文件的精确版本与 SHA-256。Review Gate 只接受状态为 `completed` 且绑定当前 consumer task 的唯一 session。异步需求仍走 Assignment，两条路线不得为同一请求重复启动。
 
 ### Hotfix
 
@@ -330,7 +337,7 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 
 > 发布任务已经并入 Sprint 编排。`docs/CICD.md` 只解释 CI/CD 红线和策略，不再定义独立流程。
 
-### Sprint 类型（H-OPT v1.6）
+### Sprint 类型（H-OPT v1.7）
 
 | 类型 | 触发 | 任务集 | worktree | 备注 |
 |------|------|--------|---------|------|
@@ -338,6 +345,7 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 | deploy-sprint(test) | 项目要求测试发布 | promote-prep→build-image→promote-test→integration | 否 | 不开新分支，操作 `release-staging/<train>` |
 | deploy-sprint(prod) | 项目要求生产发布 | …→release-prep→migration-design+regression→release-approval(L3)→prod-deploy→back-merge→observe | 否 | 含强制 L3 |
 | hotfix | 线上故障 | hotfix-init→code→quality→prod-deploy→back-merge | 是 | 跳过 deploy-sprint 编排 |
+| library-sprint | 公共包能力变更 | library-design→library-code→library-quality→library-package→library-contract→library-delivery→library-close→library-pr | 是 | 仅 `project.type=library`；package Action 后才允许消费者契约 |
 
 ### 编排者职责（取代独立 release Agent）
 

@@ -14,12 +14,16 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from mai_harness.runtime.infrastructure.core.paths import PATHS
+from mai_harness.runtime.infrastructure.core.paths import PATHS, HarnessPaths
 from mai_harness.runtime.infrastructure.core.process import ManagedProcess
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.deploy_config import load_environments_compat
 from mai_harness.runtime.infrastructure.harness_config import load_harness_config, resolve_command_group
 from mai_harness.runtime.infrastructure.local_runtime_env import parse_env_file_content
+from mai_harness.runtime.infrastructure.technology_config import (
+    load_technology_config,
+    validate_technology_capabilities,
+)
 from mai_harness.runtime.infrastructure.utils import has_command, try_run
 
 
@@ -51,7 +55,7 @@ def config_defaults() -> dict:
         "DB_CHECK_CMD": "",
         "DB_MIN_TABLES": str(verification["db_min_tables"]),
         "EXTERNAL_CHECK_CMDS": "",
-        "PROJECT_PROFILE": harness["project"]["stack"],
+        "PROJECT_TYPE": harness["project"]["type"],
     }
 
 
@@ -128,6 +132,19 @@ class Verification:
             except ValueError:
                 pass
         before = self.failures
+        if (self.root / "config/harness.yml").is_file():
+            paths = HarnessPaths.detect(project=self.root)
+            try:
+                harness = load_harness_config(force=True, path=self.root / "config/harness.yml")
+                technology = load_technology_config(
+                    path=self.root / "config/technology.yml",
+                    defaults_path=paths.framework_config / "technology.defaults.yml",
+                )
+                if harness["project"]["mode"] != "control":
+                    for error in validate_technology_capabilities(technology, harness, self.root):
+                        self.fail(f"Technology: {error}")
+            except (OSError, ValueError) as exc:
+                self.fail(f"Technology: {exc}")
         warned = False
         if self.config["EXECUTION_RUNTIME"] == "docker":
             if not has_command("docker"):
@@ -258,8 +275,8 @@ class Verification:
             )
 
     def screenshot(self) -> None:
-        if self.config["PROJECT_PROFILE"] == "python-backend" or not self.config["WEB_URL"]:
-            self.warn("Screenshot: Python backend profile 无 Web 入口，跳过")
+        if self.config["PROJECT_TYPE"] == "backend" or not self.config["WEB_URL"]:
+            self.warn("Screenshot: backend 工程无 Web 入口，跳过")
             return
         if not has_command("npx"):
             self.warn("Screenshot: Playwright CLI 不可用")

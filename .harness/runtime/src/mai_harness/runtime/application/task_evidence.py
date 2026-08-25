@@ -103,8 +103,11 @@ def _declared_output_paths(task: dict[str, Any]) -> tuple[list[Path], Path | Non
 
 def acceptance_records(task: dict[str, Any], task_type: str = "task") -> list[dict[str, str]]:
     """Resolve stable criterion IDs from explicit records or legacy string rules."""
-    stack = load_harness_config()["project"]["stack"]
-    raw = [*(task.get("acceptance") or []), *((task.get("acceptance_by_stack") or {}).get(stack) or [])]
+    project_type = load_harness_config()["project"]["type"]
+    raw = [
+        *(task.get("acceptance") or []),
+        *((task.get("acceptance_by_project_type") or {}).get(project_type) or []),
+    ]
     records: list[dict[str, str]] = []
     for item in raw:
         if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str):

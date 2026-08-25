@@ -38,6 +38,7 @@ COMMANDS = {
         "heartbeat",
         "image_promote",
         "lock",
+        "library_package",
         "migrate_deploy_config",
         "migration_check",
         "mode_check",
@@ -66,7 +67,7 @@ COMMANDS = {
 COMMANDS.update(
     {
         "assignment": _command("assignment"),
-        "delivery": _command("delivery", frozenset({"managed"})),
+        "delivery": _command("delivery", frozenset({"standalone", "managed"})),
         "acceptance-record": _command("acceptance_record", frozenset({"standalone", "managed"})),
         "worktree": _command("worktree", frozenset({"standalone", "managed"})),
         "task-rollback": _command("task_rollback", frozenset({"standalone", "managed"})),
@@ -76,6 +77,7 @@ COMMANDS.update(
         "test-integration": _command("test_integration", frozenset({"control"})),
         "pipeline": _command("pipeline", frozenset({"standalone"})),
         "deploy": _command("deploy", frozenset({"standalone"})),
+        "dependency": _command("dependency", frozenset({"standalone", "managed"})),
         "promote": _command("promote", frozenset({"standalone"})),
         "image-promote": _command("image_promote", frozenset({"standalone"})),
         "release": _command("release", frozenset({"standalone"})),

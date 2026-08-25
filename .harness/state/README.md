@@ -10,6 +10,8 @@ CI/CD 运行时状态目录（原 `state/`，已于 v1.6 迁移至此）。
 | `acceptance/*.yml` | `scripts/acceptance_record.py` | L3 走查审批记录 |
 | `sprints/*.json` | `harness sprint activate/amend` | Sprint 结构激活证据，不是第二份 Sprint 台账 |
 | `tasks/*.json` | `sprint-gate` / `task-review` | 当前任务 attempt 指针与门禁证据 |
+| `dependency-sessions/*.json` | `harness dependency` | 跨工程 Library Sprint、candidate、消费验证和采用状态 |
+| `library-packages/*.json` | `harness library-package` | Build Once wheel 的版本、源码提交与 SHA-256 证据 |
 
 任务 Plan、Review 和历史 attempt 位于 `.harness/runs/<sprint>/<task>/attempt-N/`，属于可丢弃过程数据并由 `.harness/.gitignore` 排除；长期知识只能进入 `docs/` 中对应的产品、设计、技术、测试或验收目录。
 

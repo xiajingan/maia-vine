@@ -9,6 +9,8 @@ from mai_harness.runtime.infrastructure.core.paths import resolve_project_relati
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.manifest import (
     ASSIGNMENT_DECISIONS,
+    delivery_assignment_digest,
+    delivery_references_assignment,
     digest,
     load_manifest,
     now,
@@ -191,14 +193,15 @@ class AssignmentService:
                     invalid_documents.append({"path": str(path), "errors": [f"Delivery JSON 无法解析: {exc}"]})
             delivery_ids = [item.get("delivery_id") for _, item in parsed_deliveries]
             for path, item in parsed_deliveries:
-                if item.get("assignment_id") == assignment_id:
+                bound_assignment_digest = delivery_assignment_digest(item, assignment_id)
+                if delivery_references_assignment(item, assignment_id):
                     delivery_errors = validate_delivery(item)
                     delivery_errors.extend(validate_delivery_publication(self.project, path, item))
                     if delivery_ids.count(item.get("delivery_id")) != 1:
                         delivery_errors.append(f"delivery_id: deliveries 目录中不唯一 {item.get('delivery_id')}")
                     if item.get("project_id") != self.project_id:
                         delivery_errors.append(f"project_id: 必须是当前工程 {self.project_id}")
-                    if item.get("assignment_digest") != assignment.get("manifest_digest"):
+                    if bound_assignment_digest != assignment.get("manifest_digest"):
                         delivery_errors.append("assignment_digest: 与 Assignment 不一致")
                     if assignment.get("assignment_type") == "dependency" and not any(
                         artifact.get("type") == "dependency-package" for artifact in item.get("artifacts", [])
