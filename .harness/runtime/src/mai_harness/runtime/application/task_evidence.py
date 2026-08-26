@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mai_harness.runtime.domain.sprint_context import table_rows
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.harness_config import load_harness_config
@@ -36,7 +37,11 @@ def _git_sha(root: Path) -> str:
 
 def _sprint_structure_digest(path: Path) -> str:
     """Hash a Sprint plan while ignoring mutable task status cells."""
-    lines = path.read_text(encoding="utf-8").splitlines()
+    return _sprint_structure_digest_bytes(path.read_bytes())
+
+
+def _sprint_structure_digest_bytes(value: bytes) -> str:
+    lines = value.decode("utf-8").splitlines()
     status_index = -1
     normalized = []
     for line in lines:
@@ -55,9 +60,73 @@ def _sprint_structure_digest(path: Path) -> str:
     return _digest_bytes(("\n".join(normalized) + "\n").encode())
 
 
+def _pre_archive_close_plan(sprint_path: Path, task_id: str, task_type: str) -> bytes | None:
+    """Reverse the only mutations allowed while a close task archives its plan."""
+
+    if task_type not in {"sprint-close", "library-close"} or sprint_path.parent.name != "completed":
+        return None
+    active_path = sprint_path.parent.parent / "active" / sprint_path.name
+    if active_path.exists():
+        return None
+    lines = sprint_path.read_bytes().decode("utf-8").splitlines(keepends=True)
+    header_count = 0
+    for index, line in enumerate(lines):
+        ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+        body = line[: -len(ending)] if ending else line
+        if body not in {"- **状态**：completed", "- **状态**: completed"}:
+            continue
+        lines[index] = body.removesuffix("completed") + "active" + ending
+        header_count += 1
+    if header_count != 1:
+        return None
+    status_index = type_index = id_index = -1
+    changed = 0
+    for index, line in enumerate(lines):
+        ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+        body = line[: -len(ending)] if ending else line
+        raw_cells = body[1:-1].split("|") if body.startswith("|") and body.endswith("|") else []
+        cells = [cell.strip() for cell in raw_cells]
+        if cells and any(cell.lower() in {"status", "状态"} for cell in cells):
+            status_index = next(position for position, cell in enumerate(cells) if cell.lower() in {"status", "状态"})
+            type_index = next((position for position, cell in enumerate(cells) if cell.lower() in {"type", "类型"}), -1)
+            id_index = next((position for position, cell in enumerate(cells) if cell.lower() == "id"), -1)
+            continue
+        if min(status_index, type_index, id_index) < 0 or len(cells) <= max(status_index, type_index, id_index):
+            continue
+        if cells[id_index] != task_id:
+            continue
+        if cells[type_index] != task_type or raw_cells[status_index] != " done ":
+            return None
+        raw_cells[status_index] = " pending "
+        lines[index] = "|" + "|".join(raw_cells) + "|" + ending
+        changed += 1
+    if changed != 1:
+        return None
+    return "".join(lines).encode()
+
+
+def _matches_controlled_close_archive(
+    sprint_path: Path,
+    task_id: str,
+    task_type: str,
+    current: dict[str, str],
+    expected: dict[str, str],
+) -> bool:
+    source = _pre_archive_close_plan(sprint_path, task_id, task_type)
+    if source is None:
+        return False
+    archived_expected = {
+        **expected,
+        "sprint_sha256": _digest_bytes(source),
+        "sprint_structure_sha256": _sprint_structure_digest_bytes(source),
+    }
+    return current == archived_expected
+
+
 def _context(
     root: Path, sprint_path: Path, rules_path: Path, task_id: str, task_type: str, task: dict[str, Any]
-) -> dict[str, str]:
+) -> dict[str, Any]:
+    facets = task_facets(sprint_path, task_id, task)
     return {
         "sprint_sha256": _digest_bytes(sprint_path.read_bytes()),
         "sprint_structure_sha256": _sprint_structure_digest(sprint_path),
@@ -66,7 +135,8 @@ def _context(
         "git_sha": _git_sha(root),
         "task_id": task_id,
         "task_type": task_type,
-        "acceptance_sha256": _digest_json(acceptance_records(task, task_type)),
+        "facets": facets,
+        "acceptance_sha256": _digest_json(acceptance_records(task, task_type, facets)),
     }
 
 
@@ -77,6 +147,31 @@ def _state(root: Path, sprint_path: Path, task_id: str) -> tuple[StateStore, str
 def _run_dir(root: Path, sprint_path: Path, task_id: str, attempt: int) -> Path:
     safe_task = _safe_name("run", task_id).removeprefix("task-run--").removesuffix(".json")
     return root / ".harness/runs" / sprint_path.stem / safe_task / f"attempt-{attempt}"
+
+
+def task_facets(sprint_path: Path, task_id: str, task: dict[str, Any]) -> list[str]:
+    """Resolve optional per-task review facets from the Sprint row or task defaults."""
+    project_type = load_harness_config()["project"]["type"]
+    supported = task.get("facets") or []
+    defaults = (task.get("default_facets_by_project_type") or {}).get(project_type, task.get("default_facets") or [])
+    rows = table_rows(sprint_path.read_text(encoding="utf-8")) if sprint_path.is_file() else []
+    row = next((item for item in rows if item.get("id") == task_id), {})
+    raw = row.get("facets") or row.get("任务属性") or row.get("能力面") or ""
+    selected = [value.strip() for value in raw.replace("，", ",").split(",") if value.strip()] or list(defaults)
+    if supported and not set(selected) <= set(supported):
+        unknown = ", ".join(sorted(set(selected) - set(supported)))
+        raise ValueError(f"任务 {task_id} 声明了不支持的 facets: {unknown}")
+    return selected
+
+
+def _finding_ledger(root: Path, sprint_path: Path, task_id: str) -> tuple[StateStore, str]:
+    return StateStore(root / ".harness/state/tasks/findings"), _safe_name(sprint_path.stem, task_id)
+
+
+def finding_ledger(root: Path, sprint_path: Path, task_id: str) -> dict[str, Any]:
+    store, name = _finding_ledger(root, sprint_path, task_id)
+    value = store.read_json(name, {"schema_version": 1, "findings": {}})
+    return value if isinstance(value, dict) else {"schema_version": 1, "findings": {}}
 
 
 def _declared_output_paths(task: dict[str, Any]) -> tuple[list[Path], Path | None]:
@@ -101,13 +196,17 @@ def _declared_output_paths(task: dict[str, Any]) -> tuple[list[Path], Path | Non
     return roots, index_path
 
 
-def acceptance_records(task: dict[str, Any], task_type: str = "task") -> list[dict[str, str]]:
+def acceptance_records(
+    task: dict[str, Any], task_type: str = "task", facets: list[str] | None = None
+) -> list[dict[str, str]]:
     """Resolve stable criterion IDs from explicit records or legacy string rules."""
     project_type = load_harness_config()["project"]["type"]
     raw = [
         *(task.get("acceptance") or []),
         *((task.get("acceptance_by_project_type") or {}).get(project_type) or []),
     ]
+    for facet in facets or []:
+        raw.extend((task.get("acceptance_by_facet") or {}).get(facet) or [])
     records: list[dict[str, str]] = []
     for item in raw:
         if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str):
@@ -182,7 +281,12 @@ def load_current_attempt(
     state = store.read_json(name, {})
     if not isinstance(state, dict) or state.get("schema_version") != 3:
         raise ValueError("任务执行轮次不存在；先运行 preflight gate")
-    if state.get("context") != _context(root, sprint_path, rules_path, task_id, task_type, task):
+    expected = _context(root, sprint_path, rules_path, task_id, task_type, task)
+    current = state.get("context")
+    if current != expected and not (
+        isinstance(current, dict)
+        and _matches_controlled_close_archive(sprint_path, task_id, task_type, current, expected)
+    ):
         raise ValueError("任务输入已变化；必须重新运行 preflight gate 创建新轮次")
     return state
 
@@ -316,6 +420,8 @@ def record_review(
     artifacts: list[Path],
 ) -> Path:
     state = require_ready_attempt(root, sprint_path, rules_path, task_id, task_type, task)
+    facets = list((state.get("context") or {}).get("facets") or [])
+    acceptance = acceptance_records(task, task_type, facets)
     report = report_path.resolve()
     if not report.is_file() or not report.is_relative_to(root.resolve()):
         raise ValueError("Review report 必须是工程内已存在文件")
@@ -326,7 +432,7 @@ def record_review(
         review_document = json.loads(report.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeError) as exc:
         raise ValueError(f"Review report 必须是合法 JSON: {exc}") from exc
-    _validate_review_document(review_document, decision, acceptance_records(task, task_type))
+    _validate_review_document(review_document, decision, acceptance)
     if decision == "pass" and not artifacts:
         raise ValueError("Review 至少需要一个实际产物 --artifact")
     artifact_records = []
@@ -376,7 +482,7 @@ def record_review(
             "decision": decision,
             "report": report.relative_to(root.resolve()).as_posix(),
             "report_sha256": _digest_bytes(report.read_bytes()),
-            "acceptance_sha256": _digest_json(acceptance_records(task, task_type)),
+            "acceptance_sha256": _digest_json(acceptance),
             "scope": review_document["scope"],
             "artifacts": artifact_records,
             "recorded_at": datetime.now(UTC).isoformat(),
@@ -384,6 +490,7 @@ def record_review(
         return current
 
     store.update_json(name, update, {})
+    _record_finding_ledger(root, sprint_path, task_id, state, review_document)
     return store.path(name)
 
 
@@ -410,12 +517,13 @@ def validate_attempt(
             if not path.is_file() or _digest_bytes(path.read_bytes()) != artifact.get("sha256"):
                 errors.append(f"{phase} Action 产物缺失或已变化: {artifact.get('path', '')}")
     review = state.get("review") or {}
+    facets = list((state.get("context") or {}).get("facets") or [])
     report = root / str(review.get("report", ""))
     if review.get("decision") != "pass":
         errors.append("缺少当前轮次 harness-review PASS 证据")
     elif not report.is_file() or _digest_bytes(report.read_bytes()) != review.get("report_sha256"):
         errors.append("Review report 缺失或已变化")
-    elif review.get("acceptance_sha256") != _digest_json(acceptance_records(task, task_type)):
+    elif review.get("acceptance_sha256") != _digest_json(acceptance_records(task, task_type, facets)):
         errors.append("Review 验收条件与当前规则不一致")
     for artifact in review.get("artifacts") or []:
         path = root / str(artifact.get("path", ""))
@@ -424,6 +532,60 @@ def validate_attempt(
     if not review.get("artifacts"):
         errors.append("Review 未绑定实际产物")
     return errors
+
+
+def _finding_fingerprint(item: dict[str, Any]) -> str:
+    identity = {
+        "acceptance_id": item["acceptance_id"],
+        "finding_key": item["finding_key"],
+        "finding_type": item["finding_type"],
+        "violated_invariant": item["violated_invariant"],
+    }
+    return _digest_json(identity)
+
+
+def _record_finding_ledger(
+    root: Path,
+    sprint_path: Path,
+    task_id: str,
+    state: dict[str, Any],
+    review: dict[str, Any],
+) -> None:
+    store, name = _finding_ledger(root, sprint_path, task_id)
+    now = datetime.now(UTC).isoformat()
+
+    def update(current: Any) -> dict[str, Any]:
+        current = current if isinstance(current, dict) else {}
+        entries = current.get("findings") if isinstance(current.get("findings"), dict) else {}
+        seen: set[str] = set()
+        for item in review["findings"]:
+            fingerprint = _finding_fingerprint(item)
+            seen.add(fingerprint)
+            previous = entries.get(fingerprint) if isinstance(entries.get(fingerprint), dict) else {}
+            status = "reopened" if previous.get("status") == "closed" else "open"
+            entries[fingerprint] = {
+                **previous,
+                "fingerprint": fingerprint,
+                "finding_key": item["finding_key"],
+                "acceptance_id": item["acceptance_id"],
+                "finding_type": item["finding_type"],
+                "quality_attributes": item["quality_attributes"],
+                "violated_invariant": item["violated_invariant"],
+                "status": status,
+                "first_seen_attempt": previous.get("first_seen_attempt", state["attempt"]),
+                "last_seen_attempt": state["attempt"],
+                "last_finding_id": item["finding_id"],
+                "last_seen_at": now,
+            }
+        if review["scope"] == "full":
+            for fingerprint, item in entries.items():
+                if fingerprint not in seen and item.get("status") in {"open", "reopened"}:
+                    item["status"] = "closed"
+                    item["closed_attempt"] = state["attempt"]
+                    item["closed_at"] = now
+        return {"schema_version": 1, "findings": entries, "updated_at": now}
+
+    store.update_json(name, update, {"schema_version": 1, "findings": {}})
 
 
 def _validate_review_document(document: Any, decision: str, acceptance: list[dict[str, str]]) -> None:
@@ -445,7 +607,7 @@ def _validate_review_document(document: Any, decision: str, acceptance: list[dic
     for item in criteria:
         if not isinstance(item, dict) or item.get("acceptance_id") not in acceptance_ids:
             raise ValueError("Review criteria 引用了未知 acceptance_id")
-        if item.get("status") not in {"pass", "fail", "not-reviewed"}:
+        if item.get("status") not in {"pass", "fail", "incomplete", "not-reviewed"}:
             raise ValueError("Review criteria.status 非法")
         if item["acceptance_id"] in seen:
             raise ValueError("Review criteria.acceptance_id 重复")
@@ -455,22 +617,89 @@ def _validate_review_document(document: Any, decision: str, acceptance: list[dic
     if decision == "pass" and (seen != acceptance_ids or any(item.get("status") != "pass" for item in criteria)):
         raise ValueError("PASS Review 必须完整覆盖且通过全部验收条件")
     finding_ids: set[str] = set()
+    finding_keys: set[str] = set()
     for item in findings:
-        required = {"finding_id", "acceptance_id", "severity", "evidence", "impact", "remediation", "blocking"}
+        required = {
+            "finding_id",
+            "finding_key",
+            "finding_type",
+            "acceptance_id",
+            "severity",
+            "evidence",
+            "impact",
+            "remediation",
+            "blocking",
+            "violated_invariant",
+            "scenario",
+            "observable_failure",
+            "quality_attributes",
+            "scope_relation",
+        }
         if not isinstance(item, dict) or not required <= set(item):
             raise ValueError("Review finding 缺少结构化必填字段")
         if item["acceptance_id"] not in acceptance_ids:
             raise ValueError("Review finding 引用了未知 acceptance_id")
         if item["severity"] not in {"critical", "major", "minor", "suggestion"}:
             raise ValueError("Review finding severity 非法")
+        if item["finding_type"] not in {
+            "defect",
+            "regression",
+            "evidence_gap",
+            "environment_blocker",
+            "scope_conflict",
+        }:
+            raise ValueError("Review finding_type 非法")
+        if item["scope_relation"] not in {"in_scope", "regression", "pre_existing", "out_of_scope"}:
+            raise ValueError("Review scope_relation 非法")
+        attributes = item["quality_attributes"]
+        allowed_attributes = {
+            "correctness",
+            "reliability",
+            "availability",
+            "scalability",
+            "concurrency",
+            "security",
+            "maintainability",
+            "simplicity",
+            "performance",
+            "operability",
+            "test_assurance",
+        }
+        if not isinstance(attributes, list) or not attributes or not set(attributes) <= allowed_attributes:
+            raise ValueError("Review quality_attributes 非法或为空")
         if type(item["blocking"]) is not bool:
             raise ValueError("Review finding blocking 必须是布尔值")
-        if any(not str(item[field]).strip() for field in ("finding_id", "evidence", "impact", "remediation")):
+        if any(
+            not str(item[field]).strip()
+            for field in (
+                "finding_id",
+                "finding_key",
+                "evidence",
+                "impact",
+                "remediation",
+                "violated_invariant",
+                "scenario",
+                "observable_failure",
+            )
+        ):
             raise ValueError("Review finding 文本字段必须非空")
+        if item["blocking"] and (
+            item["finding_type"] not in {"defect", "regression"}
+            or item["scope_relation"] not in {"in_scope", "regression"}
+        ):
+            raise ValueError("只有范围内的 defect/regression 可以作为 blocking finding")
         if item["finding_id"] in finding_ids:
             raise ValueError("Review finding_id 重复")
+        if item["finding_key"] in finding_keys:
+            raise ValueError("Review finding_key 重复")
         finding_ids.add(item["finding_id"])
+        finding_keys.add(item["finding_key"])
     if decision == "pass" and any(item.get("blocking") for item in findings):
         raise ValueError("PASS Review 不得包含 blocking finding")
     if decision == "fail" and not any(item.get("blocking") for item in findings):
         raise ValueError("FAIL Review 必须包含至少一个 blocking finding")
+    if decision == "incomplete" and not (
+        any(item.get("status") in {"incomplete", "not-reviewed"} for item in criteria)
+        or any(item.get("finding_type") in {"evidence_gap", "environment_blocker", "scope_conflict"} for item in findings)
+    ):
+        raise ValueError("INCOMPLETE Review 必须声明证据、环境或范围缺口")

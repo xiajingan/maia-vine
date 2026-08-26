@@ -102,9 +102,10 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 `agent-full` 派生子 Agent 审查产出物；`artifact-only` 由前台根据确定性 Action/Gate 证据填充同一 JSON 契约，不派生子 Agent：
 - **PASS** → 将 `scope=full` 的 Review JSON 写入 `task-context.review_report`；完整覆盖并通过全部稳定验收 ID 后，才可通过 `task-review` 登记并执行 Review Gate
-- **FAIL** → 生成具体问题 + 修复建议 → 创建新 attempt，并按该任务原执行协议重试
+- **FAIL** → 存在范围内、可复现的 defect/regression；生成具体问题 + 修复建议 → 创建新 attempt，并按该任务原执行协议重试
+- **INCOMPLETE** → 只有证据、环境或范围缺口；先分诊补证、修复环境、拆分任务或请求裁决，不得伪装成 Major defect
 
-`focused` Review 只能用于定位修复项，不能产生最终 PASS。阻断 finding 必须包含验收 ID、严重级别、可复现证据、影响和修复建议；猜测不得作为 blocking finding。
+`focused` Review 只能用于定位修复项，不能产生最终 PASS。阻断 finding 必须包含稳定 finding key、验收 ID、严重级别、可复现证据、不变式、场景、可观察故障、质量属性影响和修复建议；猜测不得作为 blocking finding。
 
 ### 产出物模板约束
 
@@ -122,7 +123,7 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 | 子 Agent | 编排者传递 | 编排者禁止 |
 |----------|-----------|-----------|
-| harness-plan | 任务 ID + 类型 + Sprint 计划路径 + 上游产出物路径列表 + task-context.plan | ❌ 预写执行计划内容 |
+| harness-plan | 任务 ID + 类型 + Sprint 计划路径 + 上游产出物路径列表 + task-context.plan/open_findings/planning_advisories | ❌ 预写执行计划内容 |
 | harness-exec | Step 1 生成的执行计划**原文** | ❌ 预写代码/文档内容、补充额外实现指令 |
 | harness-review | Step 2 产出物路径 + 规范 + 稳定验收 ID + task-context.review_report | ❌ 预判审查结论 |
 
@@ -139,11 +140,15 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 REVIEW FAIL 时，任务进入重试循环（默认最多重试 2 次，不含初始轮次），始终重新执行该任务完整的既定协议和 Review Gate。remediation 任务与父任务共享重试预算；人工重置必须提供 `--reset-retry-reason`：
 
-1. **Step 1 PLAN**：传入 Review 反馈原文 + 原执行计划路径，harness-plan 自主生成修复计划
+1. **Step 1 PLAN**：传入 Review 反馈原文 + finding ledger + 原执行计划路径，harness-plan 先做根因和范围裁决，再生成 closure matrix 与修复计划
 2. **Step 2 EXEC**：harness-exec 按修复计划执行
-3. **Step 3 REVIEW**：harness-review 按**任务原始验收条件**对全部产出物做完整审查
+3. **Step 3 REVIEW**：harness-review 先 focused 验证既有 finding 与固定回归；未关闭则直接 FAIL，全部关闭后才按任务原始适用验收执行最终 Full Review
 
-**REVIEW 范围不收窄**：重试轮次的 REVIEW 始终对全部产出物做完整审查，确保修复未引入新问题。
+**Full Review 完整、深度检查有边界**：最终结论始终覆盖全部适用验收 ID；深度检查以本轮 diff、直接影响面和明确不变式为边界。remediation 不会自动成为新验收标准。
+
+### Task facets 与规模提示
+
+任务表可选增加 `facets` 列（英文逗号分隔），从 task-rules 对应任务类型声明的 facets 中选择。Runtime 只合并适用 facet 的验收条件；未声明时使用 project.type 默认 facets。`task-context.planning_advisories` 只提示拆分风险，不改变重试策略或自动阻断。
 
 ### 质量回退协议
 

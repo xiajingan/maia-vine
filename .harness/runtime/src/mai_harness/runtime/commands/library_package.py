@@ -11,6 +11,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+from mai_harness.runtime.commands.quality_score import quality_report_basename
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.harness_config import command_enabled, load_harness_config, resolve_command
@@ -66,6 +67,21 @@ def command_artifact(stdout: str, root: Path) -> tuple[Path, str, str] | None:
     return artifact, payload["package"].strip(), payload["version"].strip()
 
 
+def quality_evidence(root: Path, sprint: str, source_commit: str) -> tuple[Path, str]:
+    path = root / "docs/test-reports" / f"{quality_report_basename(sprint)}.json"
+    if not path.is_file():
+        raise ValueError(f"Build Once 缺少 Library quality JSON: {path.relative_to(root)}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("Library quality JSON 非法") from exc
+    if data.get("passed") is not True:
+        raise ValueError("Build Once 要求 Library quality PASS")
+    if data.get("source_commit") != source_commit:
+        raise ValueError("Build Once source commit 与 Library quality source commit 不一致")
+    return path, "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def build(root: Path, sprint: str) -> dict:
     root = root.resolve()
     config = load_harness_config(force=True, path=root / "config/harness.yml")
@@ -99,6 +115,7 @@ def build(root: Path, sprint: str) -> dict:
             dirty.append(path)
     if dirty:
         raise ValueError("Build Once 要求源码已提交，worktree 仍有变更: " + ", ".join(dirty))
+    quality_path, quality_sha256 = quality_evidence(root, sprint, commit.stdout.strip())
     state = StateStore(root / ".harness/state/library-packages")
     with state.lock(f"{sprint}.build", timeout_seconds=10):
         existing = state.read_json(f"{sprint}.json")
@@ -152,6 +169,8 @@ def build(root: Path, sprint: str) -> dict:
                     "artifact": str(artifact),
                     "sha256": "sha256:" + after[artifact][0],
                     "source_commit": commit.stdout.strip(),
+                    "quality_evidence": str(quality_path),
+                    "quality_evidence_sha256": quality_sha256,
                     "built_at": now(),
                 }
                 path = state.write_json(f"{sprint}.json", evidence)

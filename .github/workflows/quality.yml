@@ -1,4 +1,4 @@
-# H-04: Sprint CI — sprint-* / sprint/* -> develop 的 L1 质量门禁
+# H-04: Sprint CI — feature/library Sprint -> develop 的 L1 质量门禁
 # Harness Engineering CICD.md
 
 name: Code Quality
@@ -42,6 +42,10 @@ jobs:
 
       - name: L1 quality score
         run: |
-          SPRINT_REF="${GITHUB_HEAD_REF#sprint/}"
-          SPRINT_ID="${SPRINT_REF#sprint-}"
+          case "$GITHUB_HEAD_REF" in
+            sprint/*|library/*) SPRINT_ID="${GITHUB_HEAD_REF#*/}" ;;
+            sprint-*|library-*) SPRINT_ID="${GITHUB_HEAD_REF#*-}" ;;
+            *) echo "Unsupported Sprint branch: $GITHUB_HEAD_REF" >&2; exit 2 ;;
+          esac
+          test -n "$SPRINT_ID"
           uv run --project .harness/runtime harness quality-score --sprint "$SPRINT_ID" --level L1

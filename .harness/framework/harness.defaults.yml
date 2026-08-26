@@ -128,11 +128,11 @@ quality:
   dimensions:
     static: {label: 静态检查, weight: 15}
     unit: {label: 单元测试 + 覆盖率, weight: 20}
-    integration: {label: 集成测试, weight: 10}
-    health: {label: 服务健康, weight: 5}
-    e2e: {label: E2E 测试, weight: 15}
+    integration: {label: 集成测试, weight: 10, applies_to: [backend, fullstack]}
+    health: {label: 服务健康, weight: 5, applies_to: [backend, fullstack]}
+    e2e: {label: E2E 测试, weight: 15, applies_to: [frontend, fullstack]}
     ui_parity: {label: UI 还原度, weight: 25, applies_to: [fullstack, frontend]}
-    performance: {label: 性能基线, weight: 10}
+    performance: {label: 性能基线, weight: 10, applies_to: [backend, frontend, fullstack]}
 
 worktree:
   root: .harness/worktrees

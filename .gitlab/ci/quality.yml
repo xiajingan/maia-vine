@@ -22,8 +22,12 @@ l1-quality:
     - uv run --project .harness/runtime harness mode-check
     - uv run --project .harness/runtime harness code-garden --ci
     - |
-      SPRINT_REF="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME#sprint/}"
-      SPRINT_ID="${SPRINT_REF#sprint-}"
+      case "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" in
+        sprint/*|library/*) SPRINT_ID="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME#*/}" ;;
+        sprint-*|library-*) SPRINT_ID="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME#*-}" ;;
+        *) echo "Unsupported Sprint branch: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" >&2; exit 2 ;;
+      esac
+      test -n "$SPRINT_ID"
       uv run --project .harness/runtime harness quality-score --sprint "$SPRINT_ID" --level L1
   artifacts:
     when: on_success

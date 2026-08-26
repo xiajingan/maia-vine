@@ -262,6 +262,11 @@ tasks:
     review_spec: "CODE_REVIEW.md"  # Step 3 REVIEW 额外加载此规范做 6 维代码评审
     gate: L1
     allowed_project_types: [backend, fullstack, frontend]
+    facets: [backend, frontend, user-journey, ui, migration, security, concurrency]
+    default_facets_by_project_type:
+      backend: [backend]
+      fullstack: [backend, frontend, user-journey, ui]
+      frontend: [frontend, user-journey, ui]
     tools:
       allow: [file-rw, search, bash, sub-agent, chrome-devtools, webapp-testing]
       deny: [modify-specs]
@@ -273,10 +278,11 @@ tasks:
       - "覆盖率 ≥ 80%"
       - "harness verify health 通过"
       - "Step 3 代码评审：6 维全检，0 Critical + 0 Major + Minor ≤ 5"
-    acceptance_by_project_type:
+    acceptance_by_facet:
       backend: ["config/harness.yml 登记的后端静态检查、单元测试和集成测试通过"]
-      fullstack: ["config/technology.yml 对应的前后端必需命令通过", "新增或变更用户链路的项目级 E2E 命令通过", "前端 UI Contract、Token 和 prototype-parity 门禁通过"]
-      frontend: ["config/technology.yml 对应的前端必需命令通过", "新增或变更用户链路的项目级 E2E 命令通过", "UI Contract、Token 和 prototype-parity 门禁通过"]
+      frontend: ["config/technology.yml 对应的前端必需命令通过"]
+      user-journey: ["新增或变更用户链路的项目级 E2E 命令通过"]
+      ui: ["前端 UI Contract、Token 和 prototype-parity 门禁通过"]
 
   dependency-change:
     label: "同步公共依赖迭代"
@@ -348,6 +354,7 @@ tasks:
     acceptance:
       - "项目 command_groups.precommit 通过"
       - "覆盖率达到项目阈值"
+      - "质量报告绑定 clean、完整的源码 commit"
 
   library-package:
     label: "公共包构建"
@@ -361,6 +368,7 @@ tasks:
     acceptance:
       - "package 由当前完整 Git commit 构建一次"
       - "版本、源码 commit 和 SHA-256 已写入 library-packages 状态证据"
+      - "package source commit 与 PASS 的 Library quality 证据一致，且绑定质量证据 SHA-256"
 
   library-delivery:
     label: "公共包交付"

@@ -23,6 +23,10 @@ uv run --project .harness/runtime harness quality-score --sprint 5-mock-adapter 
 
 `--sprint` 参数必填，脚本据此生成 Sprint 专属报告文件 `sprint-N-quality.md`。
 
+Library 工程的质量评分只接受 clean、已提交的源码，并在同名 JSON 报告中记录完整
+`source_commit`。后续 `library-package` 必须读取 PASS 报告、校验当前 commit 完全一致，
+并把质量 JSON 的 SHA-256 写入 Build Once 状态；源码在质量评分后发生变化时必须重新评分。
+
 脚本计算 7 个评分维度并生成报告。**Python 实现是评分逻辑的唯一真相源**（权重来自配置，执行和计算方式以代码为准）。
 
 ## 报告内容

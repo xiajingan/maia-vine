@@ -254,6 +254,37 @@ def validate(doc: Any, root: Path) -> Validation:
                     )
                     if set(common_acceptance) & set(type_ids):
                         error(f"tasks.{name}.acceptance 与 {project_type} acceptance ID 重复")
+        facets = task.get("facets")
+        if facets is not None and (
+            not isinstance(facets, list)
+            or not facets
+            or not all(isinstance(item, str) and item for item in facets)
+            or len(set(facets)) != len(facets)
+        ):
+            error(f"tasks.{name}.facets 必须是唯一非空字符串数组")
+            facets = []
+        default_facets = task.get("default_facets")
+        if default_facets is not None and (
+            not isinstance(default_facets, list) or not set(default_facets) <= set(facets or [])
+        ):
+            error(f"tasks.{name}.default_facets 必须是 facets 的子集")
+        defaults_by_type = task.get("default_facets_by_project_type")
+        if defaults_by_type is not None:
+            if not isinstance(defaults_by_type, dict) or not set(defaults_by_type) <= PROJECT_TYPES:
+                error(f"tasks.{name}.default_facets_by_project_type 只能声明已知 project_type")
+            elif any(not isinstance(items, list) or not set(items) <= set(facets or []) for items in defaults_by_type.values()):
+                error(f"tasks.{name}.default_facets_by_project_type 必须只引用已声明 facets")
+        acceptance_by_facet = task.get("acceptance_by_facet")
+        if acceptance_by_facet is not None:
+            if not isinstance(acceptance_by_facet, dict) or not set(acceptance_by_facet) <= set(facets or []):
+                error(f"tasks.{name}.acceptance_by_facet 只能引用已声明 facets")
+            else:
+                used_ids = set(common_acceptance)
+                for facet, items in acceptance_by_facet.items():
+                    facet_ids = validate_acceptance(items, f"tasks.{name}.acceptance_by_facet.{facet}", error, warning)
+                    if used_ids & set(facet_ids):
+                        error(f"tasks.{name}.acceptance_by_facet.{facet} acceptance ID 重复")
+                    used_ids.update(facet_ids)
         tools = task.get("tools")
         if isinstance(tools, dict):
             for key in ("allow", "deny"):

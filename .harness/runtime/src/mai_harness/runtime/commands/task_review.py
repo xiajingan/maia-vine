@@ -17,7 +17,7 @@ def main() -> int:
     parser.add_argument("--task-id", required=True)
     parser.add_argument("sprint_path", type=Path)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--decision", choices=("pass", "fail"), required=True)
+    parser.add_argument("--decision", choices=("pass", "fail", "incomplete"), required=True)
     parser.add_argument("--artifact", type=Path, action="append", default=[])
     args = parser.parse_args()
     root = Path.cwd().resolve()
