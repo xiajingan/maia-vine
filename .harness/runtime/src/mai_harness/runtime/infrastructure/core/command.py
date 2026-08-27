@@ -6,6 +6,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,10 +54,13 @@ class CommandOutcome:
     stderr: str
     returncode: int
     display: str
+    failure_kind: str | None = None
+    duration_seconds: float = 0.0
 
 
 def execute(spec: CommandSpec) -> CommandOutcome:
     command: Sequence[str] | str = spec.shell_command if spec.shell_command is not None else spec.argv or ()
+    started = time.monotonic()
     try:
         result = subprocess.run(
             command,
@@ -68,6 +72,23 @@ def execute(spec: CommandSpec) -> CommandOutcome:
             text=True,
             capture_output=True,
         )
-        return CommandOutcome(result.returncode == 0, result.stdout, result.stderr, result.returncode, spec.display())
+        return CommandOutcome(
+            result.returncode == 0,
+            result.stdout,
+            result.stderr,
+            result.returncode,
+            spec.display(),
+            None if result.returncode == 0 else "exit",
+            time.monotonic() - started,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
-        return CommandOutcome(False, "", str(exc), getattr(exc, "returncode", 1) or 1, spec.display())
+        failure_kind = "timeout" if isinstance(exc, subprocess.TimeoutExpired) else "spawn"
+        return CommandOutcome(
+            False,
+            "",
+            str(exc),
+            getattr(exc, "returncode", 1) or 1,
+            spec.display(),
+            failure_kind,
+            time.monotonic() - started,
+        )

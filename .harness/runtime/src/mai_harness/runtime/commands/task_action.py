@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -75,6 +76,14 @@ def main() -> int:
         values,
         outcome.returncode,
         artifacts=_output_artifacts(root, outcome.stdout),
+        diagnostic={
+            "failure_kind": outcome.failure_kind or "exit",
+            "duration_seconds": round(outcome.duration_seconds, 3),
+            "stdout_bytes": len(outcome.stdout.encode()),
+            "stdout_sha256": hashlib.sha256(outcome.stdout.encode()).hexdigest(),
+            "stderr_bytes": len(outcome.stderr.encode()),
+            "stderr_sha256": hashlib.sha256(outcome.stderr.encode()).hexdigest(),
+        },
     )
     print(
         json.dumps(
@@ -119,6 +128,9 @@ def _output_artifacts(root: Path, stdout: str) -> list[Path]:
     def walk(value) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
+                if key == "artifacts" and isinstance(child, list):
+                    values.extend(item for item in child if isinstance(item, str))
+                    continue
                 if key in {"evidence", "target", "receipt", "manifest", "finding"} and isinstance(child, str):
                     values.append(child)
                 else:

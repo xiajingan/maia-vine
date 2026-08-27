@@ -125,6 +125,34 @@ dependencies:
 
 quality:
   threshold: 95
+  # Optional producer for binding one quality run to its project-owned evidence manifest.
+  action_evidence:
+    command: ""
+    artifact: ""
+  # Shared quality runtime is explicitly opt-in. An empty command preserves the
+  # legacy per-dimension execution path for every existing project.
+  runtime:
+    command: ""
+    cleanup_command: ""
+    environment_handoff: false
+    startup_timeout_seconds: 180
+    shutdown_timeout_seconds: 30
+  # Backend 项目可通过项目级 config/harness.yml 登记受控 producer 与严格证据 schema。
+  # command 为空时不执行，也不会因固定文件存在而判 PASS。
+  performance_evidence:
+    command: ""
+    artifact: coverage/backend-performance.json
+    artifact_type: harness.backend-performance
+    test_node: ""
+    identity_paths: [src, tests, scripts, config, pyproject.toml]
+    min_elapsed_seconds: 300
+    duration_tolerance_seconds: 2
+    timeout_seconds: 900
+    target_concurrency: 50
+    max_p99_seconds: 8
+    count_fields: [total_requests, sample_count]
+    zero_fields: [cross_talk, pending, leak_count]
+    categories: []
   dimensions:
     static: {label: 静态检查, weight: 15}
     unit: {label: 单元测试 + 覆盖率, weight: 20}

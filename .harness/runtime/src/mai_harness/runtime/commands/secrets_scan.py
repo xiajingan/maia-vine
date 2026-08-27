@@ -9,8 +9,12 @@ from mai_harness.runtime.infrastructure.deploy_config import load_environments_c
 from mai_harness.runtime.infrastructure.utils import err, info, ok
 
 IGNORES = {".git", "node_modules", ".worktrees", "dist", "build", "state", ".venv", ".venv312", "__pycache__"}
+IGNORED_PREFIXES = (".harness/secrets/", ".harness/runs/", ".harness/artifacts/", ".harness/state/")
 PATTERNS = {
-    "api-key": re.compile(r"(api[_-]?key|secret|token|password|passwd)\s*[:=]\s*[\"']?([A-Za-z0-9+/=_-]{16,})", re.I),
+    "api-key": re.compile(
+        r"(api[_-]?key|secret|token|password|passwd)\s*[:=]\s*(?:([\"'])([^\"']{16,})\2|([A-Za-z0-9+/=-]{16,}))",
+        re.I,
+    ),
     "aws": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     "private-key": re.compile(r"-----BEGIN (RSA|OPENSSH|EC|DSA|PGP) PRIVATE KEY-----"),
     "jwt": re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
@@ -20,8 +24,13 @@ PATTERNS = {
 def candidates(root: Path, relative_paths: list[str] | None = None):
     paths = (root / path for path in relative_paths) if relative_paths is not None else root.rglob("*")
     for path in paths:
+        try:
+            relative = path.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            continue
         if (
             not path.is_file()
+            or relative.startswith(IGNORED_PREFIXES)
             or IGNORES.intersection(path.parts)
             or path.suffix.lower()
             in {
@@ -64,14 +73,14 @@ def scan(root: Path, *, staged: bool = False) -> int:
         text = path.read_text(encoding="utf-8", errors="ignore")
         for kind, pattern in PATTERNS.items():
             for match in pattern.finditer(text):
-                sample = match.group(0)
-                if re.search(r"<.+>|\$\{.+}|x{8,}|placeholder|EXAMPLE", sample, re.I):
+                sample = match.group(3) or match.group(4) if kind == "api-key" else match.group(0)
+                if re.search(r"<.+>|\$\{.+}|x{8,}|placeholder|example|sentinel|dummy|fake|invalid", sample, re.I):
                     continue
-                hits.append((path, text.count("\n", 0, match.start()) + 1, kind, sample[:80]))
+                hits.append((path, text.count("\n", 0, match.start()) + 1, kind))
     if hits:
         err(f"发现 {len(hits)} 处疑似 secret 字面值：")
-        for path, line, kind, sample in hits:
-            print(f"  {path}:{line} [{kind}] {sample}")
+        for path, line, kind in hits:
+            print(f"  {path}:{line} [{kind}]")
         return 1
     ok("未发现疑似 secret")
     return 0

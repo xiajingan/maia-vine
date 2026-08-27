@@ -69,6 +69,18 @@ Library 工程的质量评分只接受 clean、已提交的源码，并在同名
 | 前端 FCP | < 1.8s |
 | 前端 CLS | < 0.1 |
 
+Backend 不再依赖固定文件名存在性。项目在 `config/harness.yml#quality.performance_evidence`
+登记 producer 命令、JSON artifact、身份路径、测试节点、计数/零值不变量与分类集。
+`quality-score` 在本轮内删除 stale artifact、执行 producer，并重复校验：
+
+- producer 退出码与精确 JSON schema；
+- 运行前后的 Git HEAD 和受控 worktree digest；
+- 时长、并发、P99、计数守恒、分类完整与零异常字段；
+- artifact SHA-256、run ID、source identity 与唯一 test node。
+
+producer 未登记或证据无效时，backend 不会因 `k6-results.json` / `lighthouse.json`
+的占位存在而获得性能满分。
+
 ### E2E 测试（**以 test-case 为质量度量单位**）
 
 > **case vs spec 关系**：测试场景以 `docs/test-cases/**/*.yml` 为权威清单，

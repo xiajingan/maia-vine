@@ -30,6 +30,8 @@ class Action:
 PREFLIGHT = frozenset({"preflight"})
 EXECUTE = frozenset({"entry", "execute"})
 REVIEW = frozenset({"review", "artifact"})
+QUALITY_ACTION_TIMEOUT_SECONDS = 1800
+QUALITY_ACTION_RESERVE_SECONDS = 600
 
 ACTIONS = {
     "project.verify.preflight": Action(("verify", "preflight"), "项目与依赖预检", PREFLIGHT),
@@ -48,7 +50,11 @@ ACTIONS = {
         ("action", "vcs.fetch.release-branches"), "获取发布分支", PREFLIGHT, effect="network"
     ),
     "project.quality.score": Action(
-        ("quality-score", "--sprint", "{sprint}"), "Sprint 质量评分", EXECUTE, effect="write"
+        ("quality-score", "--sprint", "{sprint}"),
+        "Sprint 质量评分",
+        EXECUTE,
+        effect="write",
+        timeout_seconds=QUALITY_ACTION_TIMEOUT_SECONDS,
     ),
     "project.library.package": Action(
         ("library-package", "--sprint", "{sprint}"),

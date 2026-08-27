@@ -42,3 +42,11 @@ class ManagedProcess:
                 os.killpg(self.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+        try:
+            self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(self.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            self.process.wait(timeout=5)

@@ -54,6 +54,7 @@ COMMANDS = {
         "sprint_gate",
         "sprint",
         "task_action",
+        "task_commit",
         "task_context",
         "task_review",
         "test_case_backfill",

@@ -6,6 +6,8 @@ developer_instructions = """
 # Harness Review Agent
 
 > 任务级审查。由前台编排者（harness-sprint）通过 `invoke_subagent` 动态启动，并在隔离的 background context 中运行。
+
+> **单次实例约束**：本实例只能处理 prompt 中 `agent_invocation` 绑定的一个 task attempt。开始前必须运行带 `--role review --agent-invocation-id <id> --agent-runtime <runtime>` 的 `harness task-context`；缺失、错配，或收到第二个任务/attempt 时必须拒绝。Review 必须使用未参与本轮 Plan/Exec 的全新上下文。
 > **核心原则：只读不写——审查不改代码。**
 
 ## 职责

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import re
 import sys
 import warnings
 from pathlib import Path
 from typing import Any
 
+from mai_harness.runtime.domain.actions import QUALITY_ACTION_RESERVE_SECONDS, QUALITY_ACTION_TIMEOUT_SECONDS
 from mai_harness.runtime.domain.modes import LEGACY_PROJECT_TYPES, PROJECT_TYPES, validate_mode_config
 from mai_harness.runtime.infrastructure.core.command import harness_command
 from mai_harness.runtime.infrastructure.core.paths import PATHS
@@ -71,6 +73,116 @@ def validate(config: dict[str, Any]) -> list[str]:
     for name, command in config.get("commands", {}).items():
         if not isinstance(command, list) or not all(isinstance(item, str) and item for item in command):
             errors.append(f"commands.{name}: 必须是非空字符串组成的 argv 数组或空数组")
+    quality = config.get("quality", {})
+    runtime = quality.get("runtime", {}) if isinstance(quality, dict) else None
+    runtime_fields = {
+        "command",
+        "cleanup_command",
+        "environment_handoff",
+        "startup_timeout_seconds",
+        "shutdown_timeout_seconds",
+    }
+    if not isinstance(runtime, dict):
+        errors.append("quality.runtime: 必须是对象")
+        runtime = {}
+    elif unknown := set(runtime) - runtime_fields:
+        errors.append(f"quality.runtime: 未知字段 {sorted(unknown)}")
+    runtime_command = runtime.get("command", "")
+    cleanup_command = runtime.get("cleanup_command", "")
+    for field, value in (("command", runtime_command), ("cleanup_command", cleanup_command)):
+        if not isinstance(value, str):
+            errors.append(f"quality.runtime.{field}: 必须是命令名称或空字符串")
+        elif value and not config.get("commands", {}).get(value):
+            errors.append(f"quality.runtime.{field}: 必须引用已定义的非空命令")
+    if cleanup_command and not runtime_command:
+        errors.append("quality.runtime.cleanup_command: 只能在启用 runtime.command 时配置")
+    if not isinstance(runtime.get("environment_handoff", False), bool):
+        errors.append("quality.runtime.environment_handoff: 必须是 boolean")
+    for field in ("startup_timeout_seconds", "shutdown_timeout_seconds"):
+        value = runtime.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or value <= 0
+            or value > QUALITY_ACTION_TIMEOUT_SECONDS
+        ):
+            errors.append(f"quality.runtime.{field}: 必须是有限、正数且不超过质量 Action 上限")
+    action_evidence = quality.get("action_evidence", {}) if isinstance(quality, dict) else None
+    if not isinstance(action_evidence, dict):
+        errors.append("quality.action_evidence: 必须是对象")
+        action_evidence = {}
+    elif unknown := set(action_evidence) - {"command", "artifact"}:
+        errors.append(f"quality.action_evidence: 未知字段 {sorted(unknown)}")
+    evidence_command = action_evidence.get("command", "")
+    evidence_artifact = action_evidence.get("artifact", "")
+    if not isinstance(evidence_command, str):
+        errors.append("quality.action_evidence.command: 必须是命令名称或空字符串")
+    elif evidence_command and not config.get("commands", {}).get(evidence_command):
+        errors.append("quality.action_evidence.command: 必须引用已定义的非空命令")
+    artifact_path = Path(evidence_artifact) if isinstance(evidence_artifact, str) else Path()
+    if not isinstance(evidence_artifact, str):
+        errors.append("quality.action_evidence.artifact: 必须是字符串")
+    elif evidence_artifact and (
+        artifact_path.is_absolute() or ".." in artifact_path.parts or artifact_path.suffix != ".json"
+    ):
+        errors.append("quality.action_evidence.artifact: 必须是安全的工程内 JSON 路径")
+    if bool(evidence_command) != bool(evidence_artifact):
+        errors.append("quality.action_evidence: 启用时 command/artifact 必须同时配置")
+    performance = config.get("quality", {}).get("performance_evidence", {})
+    if not isinstance(performance, dict):
+        errors.append("quality.performance_evidence: 必须是对象")
+        performance = {}
+    performance_command = performance.get("command", "")
+    if not isinstance(performance_command, str):
+        errors.append("quality.performance_evidence.command: 必须是命令名称或空字符串")
+    elif performance_command and not config.get("commands", {}).get(performance_command):
+        errors.append("quality.performance_evidence.command: 必须引用已定义的非空命令")
+    for field in ("artifact", "artifact_type"):
+        value = performance.get(field)
+        if not isinstance(value, str) or not value:
+            errors.append(f"quality.performance_evidence.{field}: 必须是非空字符串")
+    test_node = performance.get("test_node")
+    if not isinstance(test_node, str):
+        errors.append("quality.performance_evidence.test_node: 必须是字符串")
+    artifact = Path(str(performance.get("artifact", "")))
+    if artifact.is_absolute() or ".." in artifact.parts or artifact.suffix != ".json":
+        errors.append("quality.performance_evidence.artifact: 必须是安全的工程内 JSON 路径")
+    for field in ("identity_paths", "count_fields", "zero_fields", "categories"):
+        values = performance.get(field)
+        empty_allowed = field == "categories" and not performance_command
+        if (
+            not isinstance(values, list)
+            or (not values and not empty_allowed)
+            or not all(isinstance(item, str) and item for item in values)
+        ):
+            errors.append(f"quality.performance_evidence.{field}: 必须是非空字符串数组")
+        elif field == "identity_paths" and any(Path(item).is_absolute() or ".." in Path(item).parts for item in values):
+            errors.append("quality.performance_evidence.identity_paths: 只允许安全的工程内路径")
+        elif len(values) != len(set(values)):
+            errors.append(f"quality.performance_evidence.{field}: 禁止重复值")
+    count_fields = performance.get("count_fields", [])
+    zero_fields = performance.get("zero_fields", [])
+    if isinstance(count_fields, list) and isinstance(zero_fields, list) and set(count_fields) & set(zero_fields):
+        errors.append("quality.performance_evidence: count_fields/zero_fields 禁止重叠")
+    for field in ("min_elapsed_seconds", "duration_tolerance_seconds", "timeout_seconds", "target_concurrency"):
+        value = performance.get(field)
+        if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+            errors.append(f"quality.performance_evidence.{field}: 必须是正数")
+    max_p99 = performance.get("max_p99_seconds")
+    if isinstance(max_p99, bool) or not isinstance(max_p99, int | float) or max_p99 <= 0:
+        errors.append("quality.performance_evidence.max_p99_seconds: 必须是正数")
+    timeout = performance.get("timeout_seconds")
+    minimum = performance.get("min_elapsed_seconds")
+    if isinstance(timeout, int | float) and isinstance(minimum, int | float) and timeout <= minimum:
+        errors.append("quality.performance_evidence.timeout_seconds: 必须大于 min_elapsed_seconds")
+    if isinstance(timeout, int | float) and timeout + QUALITY_ACTION_RESERVE_SECONDS > QUALITY_ACTION_TIMEOUT_SECONDS:
+        errors.append(
+            "quality.performance_evidence.timeout_seconds: 必须为其他质量维度预留至少 "
+            f"{QUALITY_ACTION_RESERVE_SECONDS} 秒"
+        )
+    if performance_command and (not performance.get("test_node") or not performance.get("categories")):
+        errors.append("quality.performance_evidence: 启用 producer 时 test_node/categories 不得为空")
     command_names = set(config.get("commands", {}))
     conditions = config.get("command_conditions", {})
     if not isinstance(conditions, dict):

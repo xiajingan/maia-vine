@@ -52,7 +52,7 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 | `harness-exec` | Step 2 | 执行者 | **自主**接收执行计划，独立决定实现细节，产出任务交付物 |
 | `harness-review` | Step 3 | 审查者 | **自主**对照规范验收条件审查产出物（PASS/FAIL）；只读不写 |
 
-> **关键原则**：每个子 Agent 都是独立进程，有完整的自主权。编排者只传递上下文边界（见下方调度协议），不传递实现细节。
+> **关键原则**：每个 `task × attempt × role` 都使用独立的新 Agent 实例。编排者只传递上下文边界（见下方调度协议），不传递实现细节，也不通过旧会话记忆交接。
 
 ---
 
@@ -98,6 +98,8 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 `agent` 任务由子 Agent 接收计划全文并实施；`action` 任务只运行声明的 `task-action`；`orchestrator` 任务由前台执行规则 steps。三者互斥。
 
+`pr` / `library-pr` 的 preflight 身份绑定允许当前 Exec Agent 创建提交，但不自动信任任意 HEAD 漂移。Exec 每创建一个提交后必须立即按 `task-context.git_identity.advance_command` 调用 `task-commit`：Runtime 仅接受当前 attempt 已绑定的 Exec invocation、同一分支且以已登记 HEAD 为唯一父提交的直接后继。跳过中间提交、merge、未登记提交、切换分支、rebase/reset/force-push 造成的历史改写都会使后续 Review 阻断，但逐个登记的合法提交不会消耗 retry 或创建新 attempt。
+
 ### Step 3: REVIEW → 启动子 Agent (agent_type: harness-review)
 
 `agent-full` 派生子 Agent 审查产出物；`artifact-only` 由前台根据确定性 Action/Gate 证据填充同一 JSON 契约，不派生子 Agent：
@@ -117,7 +119,7 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 > **核心原则：编排者只传递上下文边界，子 Agent 自主完成工作。**
 
-编排者通过 `task` 工具启动子 Agent，每个子 Agent 是独立进程，拥有完整工具集和自主决策权。
+编排者先从 `task-context.agent_invocations` 获取绑定当前 attempt 的 `instance_name` 和 `invocation_id`，再启动子 Agent。每个实例只允许调用一次；Codex 不得使用 `followup_task` 复用旧 Agent，Agy 不得重复调用同一动态实例，其他运行时也必须创建新会话。子 Agent 启动后使用对应 role 和 invocation ID 再次调用 `task-context`，将唯一声明写入当前 attempt；attempt 归档时该记录随证据一并保留。
 
 ### 编排者传递内容（输入边界）
 
@@ -129,12 +131,17 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 
 ### 调度约束
 
-1. **禁止越权**：编排者不得在 prompt 中预写实现代码、文档内容或设计方案
-2. **原文传递**：Step 1 → Step 2 传递执行计划原文，编排者不得改写或补充
-3. **独立执行**：每个子 Agent 自主加载所需规范文件，编排者不代为加载后粘贴
-4. **顺序阻塞**：Step 1 完成后才启动 Step 2，Step 2 完成后才启动 Step 3
-5. **失败重试**：Step 3 FAIL 时，将 Review 反馈传递给 Step 1 重新规划；上限读取 `config/harness.yml#task_execution.max_review_retries`（默认 2 次，不含初始轮次，最大允许配置为 5）
-6. **轮次隔离**：FAIL 后使用 `sprint-gate ... --new-attempt --increment-retry` 创建新轮次；旧轮次 Action/Review 证据不得复用
+1. **全新实例**：Plan、Exec、Review 分别创建新 Agent，任何实例不得处理第二个 role、task 或 attempt
+2. **实例绑定**：prompt 必须原样携带 `invocation_id`；子 Agent 通过 `task-context --role ... --agent-invocation-id ... --agent-runtime ...` 绑定后才能工作
+3. **Review 独立**：Review Agent 不得参与本轮 Plan/Exec，也不得复用上一轮 Review 上下文
+4. **禁止越权**：编排者不得在 prompt 中预写实现代码、文档内容或设计方案
+5. **原文传递**：Step 1 → Step 2 传递执行计划原文，编排者不得改写或补充
+6. **独立执行**：每个子 Agent 自主加载所需规范文件，编排者不代为加载后粘贴
+7. **顺序阻塞**：Step 1 完成后才启动 Step 2，Step 2 完成后才启动 Step 3
+8. **失败重试**：Step 3 FAIL 后创建新 attempt，并用新的三角色实例重新执行；旧 Agent 不得接收 follow-up
+9. **轮次隔离**：FAIL 后使用 `sprint-gate ... --new-attempt --increment-retry` 创建新轮次；旧轮次 Agent、Action 和 Review 证据不得复用
+
+`instance_name`/`invocation_id` 由 attempt 的随机 `run_id` 派生，因此不同任务轮次和角色不会冲突。Runtime 能验证声明的 invocation 唯一且绑定当前轮次，但宿主未提供可信 session identity 时，是否真正创建了新上下文仍由上述调度协议保证。
 
 ### FAIL 重试协议
 

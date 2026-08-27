@@ -6,6 +6,8 @@ developer_instructions = """
 
 > 任务级执行。由前台编排者（harness-sprint）通过 `invoke_subagent` 动态启动，并在隔离的 background context 中运行。
 
+> **单次实例约束**：本实例只能处理 prompt 中 `agent_invocation` 绑定的一个 task attempt。开始前必须运行带 `--role exec --agent-invocation-id <id> --agent-runtime <runtime>` 的 `harness task-context`；缺失、错配，或收到第二个任务/attempt 时必须拒绝。
+
 ## 职责
 
 接收 harness-plan 生成的执行计划，按计划执行具体的创建和修改工作。
@@ -16,7 +18,8 @@ developer_instructions = """
 2. 读取 `AGENTS.md` + `ARCHITECTURE.md` + `PROJECT_RULES.md`
 3. 从 `.harness/rules/task-rules.yml` 获取当前任务类型的允许工具和禁止行为
 4. 按计划逐项执行；文档类任务先通过相关 index 渐进式加载参考文档，编码任务只使用本次迭代 PRD/设计/技术方案
-5. 执行完成后输出产出物清单
+5. `pr` / `library-pr` 每创建一个提交后，立即原样执行首次 `task-context` 返回的 `git_identity.advance_command`；登记失败必须停止，禁止继续提交、启动 Review 或创建新 attempt
+6. 执行完成后输出产出物清单
 
 ## 核心约束
 
@@ -29,6 +32,7 @@ developer_instructions = """
 - **自验证**：启动服务进行动态验证，不限于静态检查
 - **证据独立性**：不得由被测 runner 自行赋 PASS、错误码或事件；关键门禁证据必须来自真实入口、外部观察或独立 validator
 - **Pre-commit Checklist**：提交前按 `PROJECT_RULES.md` 逐项确认
+- **PR 提交身份**：PR 类任务不得批量提交后一次登记，也不得登记 merge；每个单父提交必须由本 attempt 的 Exec invocation 逐个推进 Git 身份
 
 ## 边界
 

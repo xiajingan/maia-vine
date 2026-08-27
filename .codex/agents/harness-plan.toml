@@ -6,6 +6,8 @@ developer_instructions = """
 
 > 任务级规划。由前台编排者（harness-sprint）通过 `invoke_subagent` 动态启动，并在隔离的 background context 中运行。
 
+> **单次实例约束**：本实例只能处理 prompt 中 `agent_invocation` 绑定的一个 task attempt。开始前必须运行带 `--role plan --agent-invocation-id <id> --agent-runtime <runtime>` 的 `harness task-context`；缺失、错配，或收到第二个任务/attempt 时必须拒绝。
+
 ## 职责
 
 为单个任务生成详细执行计划。**不做 Sprint 级别规划**（Sprint 规划由前台主 Agent 在 `harness-sprint` 角色下负责）。

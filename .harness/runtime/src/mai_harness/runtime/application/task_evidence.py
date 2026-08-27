@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from mai_harness.runtime.domain.sprint_context import table_rows
+from mai_harness.runtime.domain.task_protocol import execution_protocol, review_protocol
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.harness_config import load_harness_config
@@ -30,9 +32,41 @@ def _safe_name(sprint: str, task_type: str) -> str:
     return f"task-{safe}.json"
 
 
+AGENT_INVOCATION = re.compile(r"^[a-z0-9][a-z0-9._:-]{7,191}$")
+AGENT_ROLES = {"plan", "exec", "review"}
+PR_TASK_TYPES = {"pr", "library-pr"}
+PR_GIT_POLICY_VERSION = 1
+
+
+def agent_invocation_id(run_id: str, role: str) -> str:
+    if role not in AGENT_ROLES:
+        raise ValueError(f"非法 Agent role: {role}")
+    return f"{run_id}:{role}"
+
+
+def required_agent_roles(task: dict[str, Any]) -> set[str]:
+    roles = {"plan", "exec"} if execution_protocol(task) == "agent" else set()
+    if review_protocol(task) == "agent-full":
+        roles.add("review")
+    return roles
+
+
 def _git_sha(root: Path) -> str:
     result = execute(CommandSpec.argv_command(("git", "rev-parse", "HEAD"), cwd=root))
     return result.stdout.strip() if result.ok else "unversioned"
+
+
+def _git_branch(root: Path) -> str:
+    result = execute(CommandSpec.argv_command(("git", "symbolic-ref", "--quiet", "--short", "HEAD"), cwd=root))
+    return result.stdout.strip() if result.ok else "detached"
+
+
+def _is_direct_child(root: Path, parent: str, child: str) -> bool:
+    if parent in {"", "unversioned"} or child in {"", "unversioned"}:
+        return False
+    result = execute(CommandSpec.argv_command(("git", "rev-list", "--parents", "-n", "1", child), cwd=root))
+    fields = result.stdout.strip().split() if result.ok else []
+    return len(fields) == 2 and fields == [child, parent]
 
 
 def _sprint_structure_digest(path: Path) -> str:
@@ -127,7 +161,7 @@ def _context(
     root: Path, sprint_path: Path, rules_path: Path, task_id: str, task_type: str, task: dict[str, Any]
 ) -> dict[str, Any]:
     facets = task_facets(sprint_path, task_id, task)
-    return {
+    context = {
         "sprint_sha256": _digest_bytes(sprint_path.read_bytes()),
         "sprint_structure_sha256": _sprint_structure_digest(sprint_path),
         "rules_sha256": _digest_bytes(rules_path.read_bytes()),
@@ -138,6 +172,27 @@ def _context(
         "facets": facets,
         "acceptance_sha256": _digest_json(acceptance_records(task, task_type, facets)),
     }
+    if task_type in PR_TASK_TYPES:
+        context["git_branch"] = _git_branch(root)
+    return context
+
+
+def _matches_registered_pr_head(state: dict[str, Any], expected: dict[str, Any], task_type: str) -> bool:
+    if task_type not in PR_TASK_TYPES:
+        return False
+    current = state.get("context")
+    lineage = state.get("git_lineage")
+    if not isinstance(current, dict) or not isinstance(lineage, dict):
+        return False
+    static_fields = set(expected) - {"git_sha"}
+    if any(current.get(field) != expected.get(field) for field in static_fields):
+        return False
+    return (
+        lineage.get("policy_version") == PR_GIT_POLICY_VERSION
+        and lineage.get("branch") == expected.get("git_branch")
+        and lineage.get("base_sha") == current.get("git_sha")
+        and lineage.get("head_sha") == expected.get("git_sha")
+    )
 
 
 def _state(root: Path, sprint_path: Path, task_id: str) -> tuple[StateStore, str]:
@@ -246,15 +301,21 @@ def ensure_attempt(
         # Starting Preflight revokes any previous ready authorization first.
         # A repeated failed Preflight may reuse the same pending record, but a
         # previously executable attempt can never survive a new Preflight run.
-        if new_attempt or current.get("context") != expected or current.get("status") != "pending":
+        if (
+            new_attempt
+            or current.get("context") != expected
+            or current.get("status") != "pending"
+            or current.get("agent_policy_version") != 1
+        ):
             if current.get("attempt"):
                 archive = _run_dir(root, sprint_path, task_id, int(current["attempt"]))
                 StateStore(archive).write_json("attempt.json", current)
             attempt = int(current.get("attempt", 0)) + 1
             run_dir = _run_dir(root, sprint_path, task_id, attempt)
             run_dir.mkdir(parents=True, exist_ok=True)
-            return {
+            state = {
                 "schema_version": 3,
+                "agent_policy_version": 1,
                 "run_id": uuid.uuid4().hex,
                 "attempt": attempt,
                 "sprint": sprint_path.stem,
@@ -263,12 +324,21 @@ def ensure_attempt(
                 "status": "pending",
                 "context": expected,
                 "phases": {},
+                "agent_invocations": {},
                 "review": None,
                 "run_dir": run_dir.relative_to(root).as_posix(),
                 "plan": (run_dir / "plan.md").relative_to(root).as_posix(),
                 "review_report": (run_dir / "review.json").relative_to(root).as_posix(),
                 "created_at": datetime.now(UTC).isoformat(),
             }
+            if task_type in PR_TASK_TYPES:
+                state["git_lineage"] = {
+                    "policy_version": PR_GIT_POLICY_VERSION,
+                    "branch": expected["git_branch"],
+                    "base_sha": expected["git_sha"],
+                    "head_sha": expected["git_sha"],
+                }
+            return state
         return current
 
     return store.update_json(name, update, {})
@@ -283,12 +353,69 @@ def load_current_attempt(
         raise ValueError("任务执行轮次不存在；先运行 preflight gate")
     expected = _context(root, sprint_path, rules_path, task_id, task_type, task)
     current = state.get("context")
-    if current != expected and not (
-        isinstance(current, dict)
-        and _matches_controlled_close_archive(sprint_path, task_id, task_type, current, expected)
-    ):
+    pr_identity_mismatch = task_type in PR_TASK_TYPES and not _matches_registered_pr_head(state, expected, task_type)
+    ordinary_identity_mismatch = (
+        task_type not in PR_TASK_TYPES
+        and current != expected
+        and not (
+            isinstance(current, dict)
+            and _matches_controlled_close_archive(sprint_path, task_id, task_type, current, expected)
+        )
+    )
+    if pr_identity_mismatch or ordinary_identity_mismatch:
         raise ValueError("任务输入已变化；必须重新运行 preflight gate 创建新轮次")
     return state
+
+
+def advance_pr_head(
+    root: Path,
+    sprint_path: Path,
+    rules_path: Path,
+    task_id: str,
+    task_type: str,
+    task: dict[str, Any],
+    *,
+    invocation_id: str,
+) -> dict[str, Any]:
+    """Authorize a PR task's new linear HEAD using its bound Exec invocation."""
+    if task_type not in PR_TASK_TYPES:
+        raise ValueError("Git HEAD 推进只允许用于 pr/library-pr 任务")
+    store, name = _state(root, sprint_path, task_id)
+    expected = _context(root, sprint_path, rules_path, task_id, task_type, task)
+
+    def update(current: Any) -> dict[str, Any]:
+        if not isinstance(current, dict) or current.get("schema_version") != 3:
+            raise ValueError("任务执行轮次不存在；先运行 preflight gate")
+        if current.get("status") != "ready":
+            raise ValueError("任务 Preflight 尚未通过，拒绝登记 Git HEAD")
+        context = current.get("context")
+        lineage = current.get("git_lineage")
+        if not isinstance(context, dict) or not isinstance(lineage, dict):
+            raise ValueError("当前 PR attempt 早于 Git 身份绑定策略；必须重新运行 Preflight")
+        static_fields = set(expected) - {"git_sha"}
+        if any(context.get(field) != expected.get(field) for field in static_fields):
+            raise ValueError("任务输入或 Git 分支已变化；拒绝登记 Git HEAD")
+        if (
+            lineage.get("policy_version") != PR_GIT_POLICY_VERSION
+            or lineage.get("branch") != expected.get("git_branch")
+            or lineage.get("base_sha") != context.get("git_sha")
+        ):
+            raise ValueError("PR Git 身份绑定记录无效；必须重新运行 Preflight")
+        binding = (current.get("agent_invocations") or {}).get("exec")
+        if not isinstance(binding, dict) or binding.get("invocation_id") != invocation_id:
+            raise ValueError("只有当前 attempt 已绑定的 Exec invocation 可以登记 Git HEAD")
+        previous = str(lineage.get("head_sha", ""))
+        observed = str(expected.get("git_sha", ""))
+        if previous == observed:
+            raise ValueError("Git HEAD 未产生新提交")
+        if not _is_direct_child(root, previous, observed):
+            raise ValueError("Git HEAD 不是当前 attempt 已登记 HEAD 的单一直接子提交；拒绝跳跃登记、merge 或历史改写")
+        lineage["head_sha"] = observed
+        lineage["advanced_by"] = invocation_id
+        lineage["advanced_at"] = datetime.now(UTC).isoformat()
+        return current
+
+    return store.update_json(name, update, {})
 
 
 def require_ready_attempt(
@@ -298,6 +425,8 @@ def require_ready_attempt(
     state = load_current_attempt(root, sprint_path, rules_path, task_id, task_type, task)
     if state.get("status") != "ready":
         raise ValueError("任务 Preflight 尚未通过，拒绝执行 Action")
+    if state.get("agent_policy_version") != 1 or not isinstance(state.get("agent_invocations"), dict):
+        raise ValueError("当前轮次早于 Agent 隔离策略；必须重新运行 Preflight 创建新 attempt")
     return state
 
 
@@ -318,6 +447,55 @@ def activate_attempt(
     return store.path(name)
 
 
+def bind_agent_invocation(
+    root: Path,
+    sprint_path: Path,
+    rules_path: Path,
+    task_id: str,
+    task_type: str,
+    task: dict[str, Any],
+    *,
+    role: str,
+    invocation_id: str,
+    runtime: str,
+) -> dict[str, Any]:
+    """Bind one declared fresh Agent invocation to the current task attempt."""
+    state = require_ready_attempt(root, sprint_path, rules_path, task_id, task_type, task)
+    if role not in required_agent_roles(task):
+        raise ValueError(f"当前任务协议不允许 {role} Agent")
+    expected = agent_invocation_id(state["run_id"], role)
+    if invocation_id != expected or not AGENT_INVOCATION.fullmatch(invocation_id):
+        raise ValueError(f"Agent invocation 与当前 attempt/role 不匹配: {role}")
+    if not runtime or len(runtime) > 64 or not re.fullmatch(r"[A-Za-z0-9._-]+", runtime):
+        raise ValueError("Agent runtime 标识非法")
+    binding = {
+        "invocation_id": invocation_id,
+        "role": role,
+        "runtime": runtime,
+        "run_id": state["run_id"],
+        "task_id": task_id,
+        "task_type": task_type,
+        "attempt": state["attempt"],
+    }
+    store, name = _state(root, sprint_path, task_id)
+
+    def update_state(current: Any) -> dict[str, Any]:
+        if not isinstance(current, dict) or current.get("run_id") != state["run_id"]:
+            raise ValueError("任务执行轮次已变化，拒绝绑定 Agent")
+        bindings = current.setdefault("agent_invocations", {})
+        existing = bindings.get(role)
+        if existing is not None:
+            raise ValueError("Agent invocation 已使用；每个实例只能绑定一次")
+        bindings[role] = {
+            **binding,
+            "bound_at": datetime.now(UTC).isoformat(),
+        }
+        return current
+
+    store.update_json(name, update_state, {})
+    return binding
+
+
 def record_phase(
     root: Path,
     sprint_path: Path,
@@ -330,6 +508,7 @@ def record_phase(
     values: dict[str, str],
     returncode: int,
     artifacts: list[Path] | None = None,
+    diagnostic: dict[str, Any] | None = None,
 ) -> Path:
     state = require_ready_attempt(root, sprint_path, rules_path, task_id, task_type, task)
     store, name = _state(root, sprint_path, task_id)
@@ -347,13 +526,16 @@ def record_phase(
                         "sha256": _digest_bytes(resolved.read_bytes()),
                     }
                 )
-        current.setdefault("phases", {})[phase] = {
+        phase_record = {
             "action": action,
             "values_sha256": _digest_json(values),
             "returncode": returncode,
             "artifacts": artifact_records,
             "recorded_at": datetime.now(UTC).isoformat(),
         }
+        if returncode != 0 and diagnostic:
+            phase_record["diagnostic"] = diagnostic
+        current.setdefault("phases", {})[phase] = phase_record
         return current
 
     store.update_json(name, update, {})
@@ -504,6 +686,26 @@ def validate_attempt(
     errors: list[str] = []
     if state.get("status") != "ready":
         errors.append("任务 Preflight 尚未通过")
+    if state.get("agent_policy_version") != 1:
+        errors.append("当前轮次早于 Agent 隔离策略；必须重新运行 Preflight 创建新 attempt")
+    else:
+        bindings = state.get("agent_invocations") or {}
+        for role in sorted(required_agent_roles(task)):
+            binding = bindings.get(role) if isinstance(bindings, dict) else None
+            expected = agent_invocation_id(str(state.get("run_id", "")), role)
+            if not isinstance(binding, dict) or binding.get("invocation_id") != expected:
+                errors.append(f"缺少当前轮次全新 {role} Agent invocation 证据")
+        invocation_ids = (
+            [
+                item.get("invocation_id")
+                for item in bindings.values()
+                if isinstance(item, dict) and item.get("invocation_id")
+            ]
+            if isinstance(bindings, dict)
+            else []
+        )
+        if len(invocation_ids) != len(set(invocation_ids)):
+            errors.append("Plan/Exec/Review Agent invocation 必须相互独立")
     phases = state.get("phases") or {}
     for phase, action in (
         ("entry", task.get("entry_action")),
@@ -700,6 +902,8 @@ def _validate_review_document(document: Any, decision: str, acceptance: list[dic
         raise ValueError("FAIL Review 必须包含至少一个 blocking finding")
     if decision == "incomplete" and not (
         any(item.get("status") in {"incomplete", "not-reviewed"} for item in criteria)
-        or any(item.get("finding_type") in {"evidence_gap", "environment_blocker", "scope_conflict"} for item in findings)
+        or any(
+            item.get("finding_type") in {"evidence_gap", "environment_blocker", "scope_conflict"} for item in findings
+        )
     ):
         raise ValueError("INCOMPLETE Review 必须声明证据、环境或范围缺口")
