@@ -11,6 +11,7 @@ from pathlib import Path
 
 from mai_harness.runtime.domain.document_registry import REGISTRY_DIRECTORIES, validate_registry
 from mai_harness.runtime.domain.sprint_context import validate_user_stories
+from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
 from mai_harness.runtime.infrastructure.utils import has_command, load_yaml, try_run
 
 INDEX_DIRS = (
@@ -75,6 +76,8 @@ def lint_docs(
 ) -> list[Finding]:
     root = (project_root or Path.cwd()).resolve()
     docs = docs_dir.resolve()
+    paths = HarnessPaths.detect(project=root)
+    source_repository = paths.runtime.resolve() == root and (root / "templates/USER_STORIES.md").is_file()
     findings: list[Finding] = []
 
     def add(level: str, message: str) -> None:
@@ -86,11 +89,14 @@ def lint_docs(
             if not link_exists(file, link, root):
                 add("error", f"断链: {file} → {link}")
 
-    stories = root / "USER_STORIES.md"
+    # The framework source repository is not an installed product project and
+    # has no Sprint USER_STORIES. Validate its install template instead;
+    # installed projects remain fail-closed on their project-owned truth source.
+    stories = root / "templates/USER_STORIES.md" if source_repository else root / "USER_STORIES.md"
     if stories.is_file():
         for error in validate_user_stories(stories):
             add("error", error)
-    elif (root / "config/harness.yml").is_file():
+    elif not source_repository and (root / "config/harness.yml").is_file():
         add("error", f"缺少需求真源: {stories}")
 
     for name in INDEX_DIRS:
@@ -112,7 +118,7 @@ def lint_docs(
             if file.name != "index.md" and file.name not in content:
                 add("warning", f"未索引: {file} 不在 {index} 中")
 
-    specifications = root / ".harness/docs"
+    specifications = root / "docs" if source_repository else root / ".harness/docs"
     for spec in REQUIRED_SPECS:
         if not (specifications / spec).exists():
             add("error", f"缺少规范: {specifications / spec}")

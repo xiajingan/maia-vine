@@ -311,7 +311,7 @@ assets:
     sha256: 6b961c6585d0cca97ea4d61d4c7c6091cee2bd3ee864c828c16519affca409ea
   .harness/runtime/src/mai_harness/runtime/commands/doc_lint.py:
     policy: managed-overwrite
-    sha256: 7cb9ac9ca1ab3ac7006182889193e87ef2c157f5816e8220b9a1a7bb641c9e94
+    sha256: 8dadc0b5c80850cae7d1c992f5aca1b3243766eec096b7b07def905fafbe4589
   .harness/runtime/src/mai_harness/runtime/commands/document_registry_migrate.py:
     policy: managed-overwrite
     sha256: d350bfe1b2d77c5078db7b17b269dc05c794a3f756938ccec2faaa60f9506a19
