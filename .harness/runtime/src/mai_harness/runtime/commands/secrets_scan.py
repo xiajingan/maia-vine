@@ -19,6 +19,13 @@ PATTERNS = {
     "private-key": re.compile(r"-----BEGIN (RSA|OPENSSH|EC|DSA|PGP) PRIVATE KEY-----"),
     "jwt": re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
 }
+CODE_SUFFIXES = {".c", ".cc", ".cpp", ".go", ".java", ".js", ".jsx", ".mjs", ".py", ".rs", ".ts", ".tsx", ".vue"}
+PLACEHOLDER = re.compile(
+    r"(?:^|[-_])(placeholder|example|sentinel|dummy|fake|invalid|test|fixture|disposable|redacted)(?:[-_]|$)",
+    re.I,
+)
+NAMESPACE_KEY = re.compile(r"^[a-z][a-z0-9_-]*(?::[a-z0-9_-]+){2,}$", re.I)
+CODE_IDENTIFIER = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 
 
 def candidates(root: Path, relative_paths: list[str] | None = None):
@@ -73,8 +80,13 @@ def scan(root: Path, *, staged: bool = False) -> int:
         text = path.read_text(encoding="utf-8", errors="ignore")
         for kind, pattern in PATTERNS.items():
             for match in pattern.finditer(text):
-                sample = match.group(3) or match.group(4) if kind == "api-key" else match.group(0)
-                if re.search(r"<.+>|\$\{.+}|x{8,}|placeholder|example|sentinel|dummy|fake|invalid", sample, re.I):
+                quoted = kind == "api-key" and match.group(3) is not None
+                sample = (match.group(3) or match.group(4)) if kind == "api-key" else match.group(0)
+                if re.search(r"<.+>|\$\{.+}|x{8,}", sample, re.I) or PLACEHOLDER.search(sample):
+                    continue
+                if quoted and NAMESPACE_KEY.fullmatch(sample):
+                    continue
+                if not quoted and path.suffix.lower() in CODE_SUFFIXES and CODE_IDENTIFIER.fullmatch(sample):
                     continue
                 hits.append((path, text.count("\n", 0, match.start()) + 1, kind))
     if hits:

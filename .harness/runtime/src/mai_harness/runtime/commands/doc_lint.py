@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from mai_harness.runtime.domain.document_registry import REGISTRY_DIRECTORIES, validate_registry
+from mai_harness.runtime.domain.sprint_context import validate_user_stories
 from mai_harness.runtime.infrastructure.utils import has_command, load_yaml, try_run
 
 INDEX_DIRS = (
@@ -84,6 +86,13 @@ def lint_docs(
             if not link_exists(file, link, root):
                 add("error", f"断链: {file} → {link}")
 
+    stories = root / "USER_STORIES.md"
+    if stories.is_file():
+        for error in validate_user_stories(stories):
+            add("error", error)
+    elif (root / "config/harness.yml").is_file():
+        add("error", f"缺少需求真源: {stories}")
+
     for name in INDEX_DIRS:
         directory = docs / name
         if not directory.exists():
@@ -91,6 +100,12 @@ def lint_docs(
         index = directory / "index.md"
         if not index.exists():
             add("error", f"缺少索引: {index}")
+            continue
+        if name in REGISTRY_DIRECTORIES:
+            for error in validate_registry(root, name, docs_dir=docs):
+                if "作用域索引列非法" in error:
+                    error += "；旧索引请先执行 harness registry-migrate"
+                add("error", error)
             continue
         content = index.read_text(encoding="utf-8")
         for file in sorted(directory.glob("*.md")):

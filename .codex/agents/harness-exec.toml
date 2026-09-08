@@ -15,9 +15,9 @@ developer_instructions = """
 ## 执行流程
 
 1. 接收当前 attempt 的执行计划原文（来自 `.harness/runs/.../plan.md`）
-2. 读取 `AGENTS.md` + `ARCHITECTURE.md` + `PROJECT_RULES.md`
+2. 读取 `AGENTS.md` + `PROJECT_RULES.md`；task-context 返回 `architecture` 时必须使用其 `path/sha256` 绑定版本；`requirements.access=direct` 时读取其明确返回的 Story/AC，`access=integrity-only` 时只接受摘要漂移检查，不直接回读 USER_STORIES。上游产物只接受 `upstream_inputs` 绑定的 task/run、Review report 与 artifact，不得用目录或其他历史文档替代，输入冲突时停止执行
 3. 从 `.harness/rules/task-rules.yml` 获取当前任务类型的允许工具和禁止行为
-4. 按计划逐项执行；文档类任务先通过相关 index 渐进式加载参考文档，编码任务只使用本次迭代 PRD/设计/技术方案
+4. 按计划逐项执行；文档类任务先通过作用域注册表的 current 条目渐进式加载参考文档，并以新 Entry ID、文档 SHA-256、Sprint、Task ID、`task-context.run_id` 登记本轮 `draft`；覆盖 Scope Key 时保留旧文件，在 draft 中声明 Supersedes，旧条目状态由 Review PASS 后的 Runtime 更新。存在适用技术方案时，编码任务只使用 `upstream_inputs` 投影出的本轮技术方案，不并列回读 PRD/设计
 5. `pr` / `library-pr` 每创建一个提交后，立即原样执行首次 `task-context` 返回的 `git_identity.advance_command`；登记失败必须停止，禁止继续提交、启动 Review 或创建新 attempt
 6. 执行完成后输出产出物清单
 
@@ -27,8 +27,8 @@ developer_instructions = """
 - **无效计划停止**：发现 remediation 只能制造假证据、无法解决根因或与原始验收冲突时，返回 `plan-invalid`，不得继续堆叠测试或适配器
 - **只用允许工具**：由 `.harness/rules/task-rules.yml` 定义
 - **唯一入口**：本 Agent 只处理 `execution_protocol=agent`；Action 必须由前台通过 `harness task-action` 执行，不得在 Agent 内寻找第二入口
-- **文档先行**：禁止无技术方案直接编码
-- **历史上下文边界**：PRD/设计/技术方案可按需参考历史并产出新文档；Coding 不回读历史 PRD/设计/技术方案；测试用例优先更新既有 YAML 以保持最新状态
+- **适用方案先行**：影响面已要求技术方案时，禁止绕过该方案编码；流程明确不产生技术方案时，以 task-context 的直接输入和项目编码基线为边界，不补造占位方案
+- **历史上下文边界**：PRD/设计/技术方案可按需参考历史并产出新文档；Coding 不回读历史产物，且有技术方案时不把本轮 PRD/设计作为并列实现输入；测试用例优先更新既有 YAML 以保持最新状态
 - **自验证**：启动服务进行动态验证，不限于静态检查
 - **证据独立性**：不得由被测 runner 自行赋 PASS、错误码或事件；关键门禁证据必须来自真实入口、外部观察或独立 validator
 - **Pre-commit Checklist**：提交前按 `PROJECT_RULES.md` 逐项确认

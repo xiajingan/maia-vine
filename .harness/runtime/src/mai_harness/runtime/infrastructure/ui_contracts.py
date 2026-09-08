@@ -49,6 +49,21 @@ def validate_contracts(plan: dict[str, Any]) -> list[str]:
         for target in ("prototype", "live"):
             if isinstance(contract.get(target), dict) and not contract[target].get("path"):
                 errors.append(f"{prefix}.{target}.path 缺失")
+            if isinstance(contract.get(target), dict):
+                for action_index, action in enumerate(contract[target].get("prepare", [])):
+                    action_prefix = f"{prefix}.{target}.prepare[{action_index}]"
+                    if not isinstance(action, dict):
+                        errors.append(f"{action_prefix} 必须是对象")
+                        continue
+                    if action.get("action") == "fill":
+                        has_value = "value" in action
+                        value_env = action.get("value_env")
+                        if has_value == (value_env is not None):
+                            errors.append(f"{action_prefix} 必须且只能声明 value 或 value_env")
+                        if value_env is not None and (
+                            not isinstance(value_env, str) or not value_env or not value_env.isidentifier()
+                        ):
+                            errors.append(f"{action_prefix}.value_env 不是安全变量名")
         if not isinstance(contract.get("checks", []), list):
             errors.append(f"{prefix}.checks 必须是数组")
         else:

@@ -2,6 +2,7 @@
 """Unified GitHub/GitLab/local pull-request adapter."""
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -9,6 +10,78 @@ import shutil
 from pathlib import Path
 
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
+from mai_harness.runtime.infrastructure.harness_config import valid_git_branch
+
+GITLAB_MR_URL = re.compile(r"https://[^\s<>\"']+?/-/merge_requests/[0-9]+(?=$|[\s)\],.;])")
+
+
+def gitlab_description(body_file: str | None) -> str:
+    """Encode an optional UTF-8 body for GitLab push options."""
+
+    if not body_file:
+        return ""
+    body = Path(body_file).read_text(encoding="utf-8")
+    if "\x00" in body:
+        raise ValueError("MR description 不能包含 NUL")
+    return body.replace("\r\n", "\n").replace("\r", "\n").replace("\n", r"\n")
+
+
+def gitlab_source_branch(head: str, base: str) -> str:
+    """Derive a stable adapter-owned source branch for one target MR."""
+
+    if not valid_git_branch(head) or not valid_git_branch(base):
+        raise ValueError("GitLab source/target branch 非法")
+    digest = hashlib.sha256(f"{head}\0{base}".encode()).hexdigest()[:12]
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", head).strip("-.")[:80] or "head"
+    return f"harness/mr/{slug}/{digest}"
+
+
+def gitlab_fallback_create_argv(args: argparse.Namespace) -> list[str]:
+    """Build the shell-free GitLab push-options fallback command."""
+
+    source = gitlab_source_branch(args.head, args.base)
+    description = gitlab_description(args.body_file)
+    argv = [
+        "git",
+        "push",
+        "-o",
+        "merge_request.create",
+        "-o",
+        f"merge_request.target={args.base}",
+        "-o",
+        f"merge_request.title={args.title}",
+        "-o",
+        f"merge_request.description={description}",
+    ]
+    if args.labels:
+        argv.extend(["-o", f"merge_request.label={args.labels}"])
+    argv.extend(["origin", f"HEAD:{source}"])
+    return argv
+
+
+def gitlab_fallback_mr_url(stdout: str, stderr: str) -> str:
+    """Return the unique canonical MR URL reported by GitLab's push sideband."""
+
+    urls = set(GITLAB_MR_URL.findall(f"{stdout}\n{stderr}"))
+    if len(urls) != 1:
+        raise RuntimeError(f"GitLab push 未返回唯一 MR URL（找到 {len(urls)} 个）")
+    return urls.pop()
+
+
+def gitlab_fallback_create(args: argparse.Namespace, root: Path) -> dict[str, str]:
+    """Create a GitLab MR through push options and retain its remote identity."""
+
+    argv = gitlab_fallback_create_argv(args)
+    result = execute(CommandSpec.argv_command(argv, cwd=root))
+    if not result.ok:
+        raise RuntimeError(result.stderr or result.stdout)
+    url = gitlab_fallback_mr_url(result.stdout, result.stderr)
+    return {
+        "url": url,
+        "source": argv[-1].removeprefix("HEAD:"),
+        "target": args.base,
+        "receipt": url,
+    }
 
 
 def platform(root: Path | None = None) -> str:
@@ -96,22 +169,7 @@ def main() -> int:
                 ] + (["--label", args.labels] if args.labels else [])
                 print(command(argv, root))
             elif args.action == "create":
-                argv = [
-                    "git",
-                    "push",
-                    "-u",
-                    "-o",
-                    "merge_request.create",
-                    "-o",
-                    f"merge_request.target={args.base}",
-                    "-o",
-                    f"merge_request.title={args.title}",
-                    "-o",
-                    "merge_request.remove_source_branch",
-                    "origin",
-                    f"HEAD:{args.head}",
-                ]
-                print(command(argv, root))
+                print(json.dumps(gitlab_fallback_create(args, root), ensure_ascii=False))
             elif not shutil.which("glab"):
                 raise RuntimeError("glab CLI 未安装")
             elif args.action == "status":
@@ -130,7 +188,7 @@ def main() -> int:
             else:
                 command(["glab", "mr", "note", args.number, "--message", Path(args.body_file).read_text()], root)
         return 0
-    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+    except (OSError, RuntimeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
         print(f"❌ {exc}")
         return 1
 

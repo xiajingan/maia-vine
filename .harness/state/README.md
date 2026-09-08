@@ -1,5 +1,7 @@
 # .harness/state/
 
+默认保存 Runtime 的本地过程状态。`requirements/confirmations/*.json` 是唯一需求治理例外：它绑定 Boss 对当前 Story 语义的确认，必须与 `USER_STORIES.md` 一起纳入版本控制；`requirements/events/`、`requirements/feedback/`、Sprint、Task 和其他运行状态不提交。
+
 CI/CD 运行时状态目录（原 `state/`，已于 v1.6 迁移至此）。
 
 | 文件 | 写入者 | 说明 |

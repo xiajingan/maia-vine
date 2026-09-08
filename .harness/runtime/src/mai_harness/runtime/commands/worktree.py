@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 
+from mai_harness.runtime.application.requirements import merge_story_confirmations
 from mai_harness.runtime.application.worktree_service import allocated_ports, create_linked_worktree
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.harness_config import load_harness_config
@@ -79,6 +80,7 @@ def main() -> int:
             raise RuntimeError("Worktree 存在 staged/unstaged/untracked 修改，拒绝删除")
         if not run(["git", "merge-base", "--is-ancestor", branch, args.merged_into], required=False):
             raise RuntimeError(f"分支 {branch} 尚未抵达 {args.merged_into}，拒绝删除")
+        merge_story_confirmations(path, Path.cwd(), args.task_id)
         pids = path / ".harness/pids"
         if pids.exists():
             for value in pids.read_text().split():
@@ -89,7 +91,7 @@ def main() -> int:
         run(["git", "worktree", "remove", str(path)])
         run(["git", "branch", "-d", branch])
         return 0
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         print(f"❌ {exc}")
         return 1
 

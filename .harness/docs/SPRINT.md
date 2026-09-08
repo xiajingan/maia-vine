@@ -64,13 +64,47 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 主 Agent / Sprint 编排者（前台）
   └─ 逐任务执行：
      ├─ Step 0: PRE-FLIGHT       ← 主 Agent 自行执行
-     ├─ agent: PLAN → EXEC       → harness-plan → harness-exec
+     ├─ agent: PLAN → [entry Action] → EXEC → harness-plan → 前台 task-action → harness-exec
      ├─ action: EXEC             → task-action（不派生 Plan/Exec Agent）
      ├─ orchestrator: EXEC       → 前台按规则 steps 执行
      └─ REVIEW                   → agent-full 派生 harness-review；artifact-only 使用确定性证据
          ├─ PASS → 执行 `sprint-gate ... --task-id <task-id> --phase review --strict` → 提交修改
          └─ FAIL → 回到 Step 1 重新规划（默认最多重试 2 次）
 ```
+
+### Sprint 交付契约
+
+Sprint 不是技术任务容器，而是一次可被验收的产品/能力增量；`sprint init` 生成的计划必须在激活前填写以下机器可读字段：
+
+| 字段 | 约束 |
+|---|---|
+| `planning_contract_version` | 新 Sprint 固定为 `3`；`1/2` 仅兼容升级前已激活计划 |
+| `requirement_mode` | `stories` 表示产品需求来自 USER_STORIES；`non-product-change` 表示没有产品行为变化，允许值按 Sprint 类型由 `task-rules.yml#sprint_requirement_modes` 决定 |
+| `source_stories` | `requirement_mode=stories` 时必填 `[{id: US-001, acs: [US-001-AC-01]}]`；AC 是 Acceptance Criterion（验收条件）。active 阶段校验 `ready` Story、场景内核、约束和 AC，并将选中内容摘要与 `.harness/state/requirements/confirmations/` 中的版本化 Boss 确认绑定激活状态及每个 attempt；`sprint-close` 归档后，全部当前 AC 已交付的 Story 为 `done`，部分 AC 交付则保持 `ready` 并由 completion receipt 绑定本轮 AC 语义；生命周期变化不改变需求内容摘要 |
+| `impact_surfaces` | Feature 必填 `{影响面: "具体原因"}`；可用值与其必需任务/facets 只来自 `task-rules.yml#impact_surface_requirements` |
+| `delivery_strategy` | `domain-bootstrap`、`vertical-slice`、`consumer-capability`、`deployment`、`refactor`、`remediation` 或 `governance` |
+| `observable_outcomes` | 至少一种可观察结果：用户交互、业务流程、对外接口、数据模型、消费者契约、行为保持、部署/运维或治理结果 |
+| `boss_observation` | `{entrypoint, action}` 对象，分别声明 Boss 使用入口和实际操作 |
+| `outcome_acceptance` | 非空数组，逐项声明该入口上可以明确判断 PASS/FAIL 的结果 |
+| `domain_coverage` | `{领域: [任务 ID]}` 对象；领域必须存在于 `ARCHITECTURE.md`，任务必须声明具体产出物和验收条件 |
+
+策略、可观察结果兼容关系和各 Sprint 类型的终态任务统一声明在 `task-rules.yml#delivery_strategies/sprint_delivery_contracts`，Runtime 对规则本身及计划引用执行 fail-closed 校验，文档不重复维护枚举矩阵。
+
+### 需求接入与反馈同步
+
+USER_STORIES 是需求唯一输入真源，PRD、技术方案、测试和验收都是派生产物。用户直接提出新需求时，编排者必须先把原话和已确认事实整理为临时 Story input，执行 `harness requirements intake --input <path>` 写入 `draft`；未知字段保留 TODO。向 Boss 回读场景、约束、非目标和 AC 并确认后，使用 `harness requirements confirm <Story ID...> --by <name>` 原地转为 `ready` 并记录逐 Story 内容摘要。已有 ready Story 内容变化时同一命令执行重新确认；activate/amend 同时绑定需求摘要与 ask_user 确认凭证，手工改状态不能旁路。
+
+一轮 Sprint 可以点选一个或多个 Story，并为每个 Story 选择一个或多个 AC。用户未指定 Story 时，编排器只展示 ID、标题和状态供用户点选，不得默认纳入全部需求。启动规划时若被选 Story 为 `draft` 或 ready 但缺少当前内容确认凭证，编排器先批量回读并等待 Boss 确认，再执行 `harness requirements confirm <Story ID...> --by <name>`；该命令不重写需求语义。未被本轮选中的 Draft 不要求确认，也不能进入 `source_stories`。
+
+Story input 使用唯一的紧凑 YAML 契约：顶层为 `id/title/priority/scene/statement/constraints/acceptance`；`scene` 使用 `user/context/trigger/current_difficulty/observable_outcome/source`，`constraints` 使用 `business_rules/external_constraints/non_goals/assumptions`，每个 acceptance 使用 `id/given/when/then`。该文件只放在 `.harness/runs/requirements/` 作为命令输入，不是第二份需求真源；成功同步后以 USER_STORIES 为准。
+
+Boss 走查未通过时，`acceptance-record reject` 必须显式声明反馈分类：实现缺陷和非产品问题回退 code；需求澄清/变化必须更新当前 Story；新增行为必须创建新 Story 并加入当前 `source_stories`。后两类按当前 Sprint 的 Story owner route 回退并要求 `sprint amend` 重新绑定需求与确认摘要，旧 attempt 自动失效。当前结果通过但提出后续优化时，使用 backlog disposition 创建后续 Story，不改变当前 Sprint 输入；已完成 Story 不得原地改写。
+
+`planning.project_stage=greenfield` 时，所有 Feature/Library Sprint 必须持续使用 `domain-bootstrap`，先广度优先建立领域边界、目录骨架、数据所有权、Port/公开契约和最小 walking skeleton。整体领域框架完成后，以已通过且覆盖全部领域的 Sprint outcome 执行 `harness sprint bootstrap-complete --evidence <sprint-outcome.yml>` 生成只读候选；项目负责人核对候选摘要后，在主交互中提供含 `decision: approved`、`source: ask_user`、`confirmed_by`、`confirmed_at` 和 `candidate_sha256` 的外部 signoff，再执行 `harness sprint bootstrap-approve --signoff <path>`。只有签署路径、outcome 内容摘要和 ARCHITECTURE.md 摘要同时有效时才可显式切换为 `established`；缺少阶段字段一律按 greenfield fail-closed。Feature bootstrap 的每个领域必须映射领域设计与 code，且全局包含 infra；Library bootstrap 的每个领域必须映射 library-design 与 library-code。`migrate` 仅把非空且未使用 v2/v3 planning contract 的旧 completed Sprint，或 schema v1 的历史激活状态，作为老项目已经进入交付阶段的证据并迁移为 `established`；架构文档、目录或业务代码本身不用于推断项目阶段，也不会伪造 bootstrap receipt。
+
+每轮规划必须从 Boss 可观察结果反推 PRD、设计、实现、测试和产品走查。重构可以独立成为一轮迭代，但必须声明可实际走查的接口、数据模型、业务流程或行为保持结果，并给出明确 PASS/FAIL；“代码更整洁”“测试更多”或“基础设施更完善”本身不是可验收结果。
+
+走查指南必须逐项包含交付契约的入口、操作和预期结果。`task-review` 型终态 Review 必须在 Review JSON 的 `outcome` 中亲自签认 planning contract 摘要，以及逐条 `acceptance/path/sha256/observed/result` 结构化观察，并把每个 path 登记为当前 attempt 的 Review artifact；记录 Review 后执行 `harness sprint outcome <plan> --task-id <terminal-task-id> --evidence <actual-result-file>` 只生成对应公共 receipt，不能自行产生 PASS。Feature/Maintenance 的 acceptance report 必须在“Boss 走查记录”下提供 `验收条件 | 实际观察 | 结果` 表，approve 只签认该表，不会从 expected 自动合成 observed。所有终态都会拒绝缺失、内容漂移、事后补写、symlink 越界、非当前 attempt artifact 或来源错误的证据。
 
 ### Step 0: PRE-FLIGHT（编排者自行执行）
 
@@ -80,7 +114,7 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 2. **基础设施就绪**：若任务类型定义了 `infra_action`，通过 Action Executor 执行；非 0 退出码时使用 `ask_user` 协调修复
 3. **用户确认就绪**：需要人工操作的门控保持阻塞，直到收到明确确认
 
-`sprint_gate.py` 的默认 `preflight` 阶段负责校验依赖状态、上游产出物、质量报告和 L3 审批记录；不会提前执行 `artifact_action`。
+`sprint_gate.py` 的默认 `preflight` 阶段负责校验依赖状态、上游产出物、质量报告和 L3 审批记录；不会提前执行 `artifact_action`。v3 计划的 `依赖` 列只接受任务 ID，Runtime 校验不存在未知、逆向或循环依赖，并要求每个任务的依赖闭包到达最近的实际前序阶段；阶段规则控制公共执行顺序，显式依赖闭包逐 ID 要求 done 且有当前 PASS attempt。Sprint Gate 始终验证完整依赖闭包；`task-context.upstream_inputs` 再按 `task_input_projections` 投影当前任务的直接产物输入：当 Coding 的闭包存在适用技术方案时，只暴露该技术方案，不再并列暴露 PRD/设计，但其上游漂移仍会经 Gate 阻断。没有技术方案任务的显式 maintenance/hotfix 流程保留最近依赖，不虚构方案。
 
 ### Step 1: PLAN → 启动子 Agent (agent_type: harness-plan)
 
@@ -89,14 +123,14 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 子 Agent **自主完成**以下工作（编排者不代劳）：
 
 1. 从 `.harness/rules/task-rules.yml` 获取任务类型对应的规范路径，**加载规范原文**
-2. 加载上游产出物（PRD/设计/技术方案）作为上下文
+2. 只按 `task-context.upstream_inputs` 中绑定的精确前序 run、Review report 和 artifact 加载上游产出物；存在适用技术方案时，Coding 只获得技术方案投影，PRD/设计仅供技术方案任务消费；文档任务先通过作用域注册表定位 current 条目，不得用整个目录或未登记历史文档替代
 3. 执行 Readback（输出执行步骤和评分标准原文摘录），Readback 与规范不一致则禁止继续
 4. 生成详细执行计划（修改哪些文件、实现方式、验收标准）
 5. 执行计划只写入 `harness task-context` 返回的 `.harness/runs/.../plan.md`；`docs/exec-plans/` 只保存 Sprint 级计划
 
 ### Step 2: EXEC → 启动子 Agent (agent_type: harness-exec)
 
-`agent` 任务由子 Agent 接收计划全文并实施；`action` 任务只运行声明的 `task-action`；`orchestrator` 任务由前台执行规则 steps。三者互斥。
+`agent` 任务由子 Agent 接收计划全文并实施；若声明 `entry_action`，前台必须在 Plan 已绑定且计划文件落盘后、启动 Exec Agent 前运行一次，Runtime 拒绝缺 Plan、并发、覆盖或同 attempt 重跑。`action` 任务只运行声明的 `task-action`；`orchestrator` 任务由前台执行规则 steps。三种主协议互斥，agent 内的 entry Action 只是受控副作用子阶段，不是第二条执行协议。
 
 `pr` / `library-pr` 的 preflight 身份绑定允许当前 Exec Agent 创建提交，但不自动信任任意 HEAD 漂移。Exec 每创建一个提交后必须立即按 `task-context.git_identity.advance_command` 调用 `task-commit`：Runtime 仅接受当前 attempt 已绑定的 Exec invocation、同一分支且以已登记 HEAD 为唯一父提交的直接后继。跳过中间提交、merge、未登记提交、切换分支、rebase/reset/force-push 造成的历史改写都会使后续 Review 阻断，但逐个登记的合法提交不会消耗 retry 或创建新 attempt。
 
@@ -108,6 +142,14 @@ Codex 是默认运行时，角色定义位于 `.codex/agents/*.toml`；Agy/Copil
 - **INCOMPLETE** → 只有证据、环境或范围缺口；先分诊补证、修复环境、拆分任务或请求裁决，不得伪装成 Major defect
 
 `focused` Review 只能用于定位修复项，不能产生最终 PASS。阻断 finding 必须包含稳定 finding key、验收 ID、严重级别、可复现证据、不变式、场景、可观察故障、质量属性影响和修复建议；猜测不得作为 blocking finding。
+
+Review 若发现输入层级错误，不在当前任务内静默改上游，也不按普通缺陷重试。`scope_conflict` finding 必须声明 `responsible_scope: story|product|design|technical-design` 并以 INCOMPLETE 登记；前台随后执行 `harness task-reopen <sprint-plan> --from-task-id <task-id> --reason <reason>`。Runtime 按 `task-rules.yml.scope_conflict_routes` 选择当前 Sprint 类型的责任任务并传递性回退；不属于当前流程的责任域生成 `transfer-required` receipt，当前 Sprint 持续阻塞，必须转入配置的新 Sprint。目标计划必须声明 `scope_transfer_from: <源 Sprint>/<源 Task>/<源 Run>`，该来源同时进入目标 planning contract 摘要；目标 Sprint 归档且 canonical outcome 通过后，用原命令追加 `--transfer-sprint <目标 Sprint ID>`，Runtime 校验类型、来源、终态 producer、planning contract、计划与 outcome 摘要后才解除门禁。Story 回退必须存在受影响 Story 的 ask_user feedback、重新确认和 amend；缺失责任任务时 amend 必须实际新增配置的 owner task，任意文档或结构变化都不能解除门禁。
+
+### 文档作用域注册表
+
+`docs/product-specs/index.md`、`docs/design-docs/index.md` 与 `docs/tech-docs/index.md` 是项目自有的机器可读注册表。每行绑定 Entry ID、Scope Key、文档 SHA-256、Sprint、Task ID、Run ID、来源和实际模块/页面/表/API/组件；同一 Scope Key 最多一个 `verified` current。Exec 只登记当前 attempt 的 `draft`，且只能引用本轮精确选中的 Story/AC（non-product-change 只能引用 ARCHITECTURE/ASSIGNMENT），正文作用域清单必须与本 attempt 索引逐行一致；Review PASS 后 Runtime 才发布这些行并将其 Supersedes 目标标为 `stale`，同时把该 attempt 的不可变 publication receipt 纳入 Review artifact，后续任务不依赖会继续变化的共享 index 摘要。历史文件不得跨 Sprint 复用或改写，`doc-lint --ci` 校验完整注册表。旧版索引必须显式执行 `harness registry-migrate`；缺少 Scope Key、页面/API/组件语义的旧简单索引必须通过工程内 `--mapping <yaml>` 逐文件确认，禁止自动猜测，可用 `--rollback` 在索引未被继续修改时恢复。
+
+旧简单索引 mapping 固定为 `version: 1` 与 `entries`；每项填写 `directory/file/entry_id/scope_key/module/source/sprint/status/supersedes`，产品/设计再填 `page_or_area`，技术方案再填 `tech_kind/table_or_api/component`。迁移生成的 receipt 会绑定 mapping 路径与 SHA-256；字段缺失、多余、未匹配或语义不合法时原索引保持不变。
 
 ### 产出物模板约束
 
@@ -155,7 +197,9 @@ REVIEW FAIL 时，任务进入重试循环（默认最多重试 2 次，不含�
 
 ### Task facets 与规模提示
 
-任务表可选增加 `facets` 列（英文逗号分隔），从 task-rules 对应任务类型声明的 facets 中选择。Runtime 只合并适用 facet 的验收条件；未声明时使用 project.type 默认 facets。`task-context.planning_advisories` 只提示拆分风险，不改变重试策略或自动阻断。
+任务表可选增加 `facets` 列（英文逗号分隔），从 task-rules 对应任务类型声明的 facets 中选择。Runtime 只合并适用 facet 的验收条件；未声明时使用任务默认 facets。设计任务的条件专项默认不启用，只有 PRD/Architecture 的触发器成立时才声明对应 facet；不能用 project.type 推断性能、安全、并发等风险。`task-context.planning_advisories` 只提示拆分风险，不改变重试策略或自动阻断。
+
+新建 `integration` 任务必须显式填写 `facets`。只读验证不声明 producer；任何 producer 都自动进入 `controlled-write` 合同，并要求任务表包含 `producer=command:<config.commands 名称>`、`checkpoint` 和 `failure_strategy=resume|fix-forward|restore-checkpoint`。`schema` producer 必须与 `integration.migration` 的 `checkpoint-one-way` 命令一致。Preflight 后先完成 Plan Agent，再由前台执行一次 `task-context.entry_action.command`；该命令绑定当前 attempt，在受控超时内执行 producer，并以 run-scoped 状态固化运行中、超时/失败或成功结果、交付身份和工作区快照，随后 Exec Agent 只补齐 `docs/test-reports/integration/<task-id>/receipt.yml` 中的 operations（目标与作用范围）、带摘要和 SHA-256 的 before/after/checkpoint/health evidence、失败记录及最终结果。Review Gate 会校验执行合同、当前 `promote-test` attempt 回执、producer attempt、最终 health evidence、Test 部署身份以及源码和不可变制品未变化；工作区保护只排除当前任务目录，不能修改其他 integration 任务证据。失败或 abandoned producer 禁止自动重跑：新 attempt 必须在 Sprint 行用 `recovery_of=<上一次 run_id>` 显式绑定恢复来源，并复用 checkpoint 与既定失败策略；已成功的写 producer 不得重复执行。
 
 ### 质量回退协议
 
@@ -178,7 +222,7 @@ REVIEW FAIL 时，任务进入重试循环（默认最多重试 2 次，不含�
 
 **Sprint 闭环协议**（L3 走查通过后，编排者依序执行）：
 
-1. `sprint-close` 在 sprint 分支中归档计划：`docs/exec-plans/active/` → `docs/exec-plans/completed/`，并更新 `AGENTS.md`、`USER_STORIES.md` 和偏差记录
+1. `sprint-close` 在 sprint 分支中归档计划：`docs/exec-plans/active/` → `docs/exec-plans/completed/`，并更新 `AGENTS.md`、执行 `harness requirements complete <sprint-id>`；Runtime 按 AC 当前语义累计已签收证据，全部 AC 已交付才把 Story 从 `ready` 更新为 `done`，部分交付保持 `ready` 并生成可随分支合并的 `docs/acceptance-reports/<sprint>-requirements-completion.json`，且校验 approved Boss signoff、planning contract 与需求摘要不变
 2. `pr` 把上述归档与交付物一起合入目标远端分支；禁止先合并、后在已删除 worktree 中寻找计划
 3. 明确确认合并后，从主工作区执行 `harness worktree destroy <sprint-id> --merged-into <remote-ref>`；dirty、未合并或无法验证时拒绝删除
 4. 只有人工恢复场景可使用 `harness worktree recover-destroy <sprint-id>`，该命令会明确报告强制删除目标
@@ -212,19 +256,23 @@ Feature Sprint 是 PR 级交付单元，默认创建 worktree。含 `code` 的 S
 
 | `config/harness.yml.walkthrough_env` | 任务流 |
 |---|---|
-| `development` | `product/design/tech` → `code` → `test-case-gen` → `quality` → `product-acceptance(L3)` → `sprint-close` → `pr` |
-| `test` | `product/design/tech` → `code` → `test-case-gen` → `promote-prep` → `build-image` → `promote-test` → `quality` → `product-acceptance(L3)` → `sprint-close` → `pr(develop + test)` |
+| `development` | `product` → `适用的 design/backend-design/frontend-design` → `code` → `test-case-gen` → `quality` → `product-acceptance(L3)` → `sprint-close` → `pr` |
+| `test` | `product` → `适用的 design/backend-design/frontend-design` → `code` → `test-case-gen` → `build-image` → `promote-test` → `integration` → `quality` → `product-acceptance(L3)` → `sprint-close` → `pr(develop + test)` |
 
-`test` 模式表示质量评分和产品走查必须基于 Test 环境；因此 `promote-prep`、`build-image`、`promote-test` 必须在 `quality` 前通过。Boss 走查通过并完成 `sprint-close` 归档后，`pr` 任务必须完成两条 MR：Sprint 分支 → `develop`，已走查 commit_sha → `test`。`pr` Review Gate 强制校验该 SHA 已同时抵达两个远端 ref；未抵达时禁止清理 worktree。
+`test` 模式表示质量评分和产品走查必须基于 Test 环境；因此 `build-image`、`promote-test`、`integration` 必须在 `quality` 前通过。`promote-test` Preflight 自动检查部署配置、密钥和目标环境，再通过项目部署 adapter 执行真实 Test deploy 并写入 deploy state，不以 `promote/*` MR 代替环境交付；部署后、Review 前显式生成当前 run 专属回执，Review Gate 只读校验其绑定的 build state、每个 artifact/digest 和本轮 deploy state。紧随其后的 `integration` 只消费该回执，按任务 facets 完成 Mock-free 的真实环境处理与验证，不能反向成为 `promote-test` 的前置，也不能修改代码或镜像。Boss 走查通过并完成 `sprint-close` 归档后，`pr` 任务必须完成两条 MR：Sprint 分支 → `develop`，已走查 commit_sha → `test`。`pr` Review Gate 强制校验该 SHA 已同时抵达两个远端 ref；未抵达时禁止清理 worktree。
 
 ### Deploy Sprint
 
 Deploy Sprint 只处理发布任务，不创建 worktree，不承载产品/代码设计任务。
 
+Test Deploy Sprint 的 `base_sha` 就是唯一部署候选 commit；所有 `source_sprints` 的 Boss signoff commit 必须已被该 commit 纳入，执行 `build-image` 时当前 `HEAD` 必须与其完全一致。构建状态记录完整 commit 和 signoff 摘要，后续 `promote-test` 会再次校验，不能用另一个工作区状态或未审批提交替代。
+
 | 目标 | 任务流 |
 |---|---|
-| test | `promote-prep` → `build-image` → `promote-test` → `integration` |
+| test | `build-image` → `promote-test`（自动 Preflight）→ `integration` |
 | prod | test 链路通过后 → `release-prep` → `migration-design` + `regression` → `release-approval(L3)` → `prod-deploy` → `back-merge` → `observe` |
+
+生产业务升级与数据迁移按长任务处理：`prod-deploy` 开始时固定 candidate，按批次提交 checkpoint；迁移、质量检查、服务启动或发布失败均保留业务候选、候选数据和已提交进度，修复后从最近 checkpoint 继续。框架不得主动回滚业务版本、执行数据 down、重建候选或倒退迁移进度；只有人员在当前主交互中明确要求发布回滚并生成 authorization receipt 后，才能执行 `release-rollback`。完整契约见 `MIGRATION.md`。
 
 ### Control Sprint
 
@@ -235,7 +283,7 @@ Control 仍使用统一 Sprint 编排，不建立独立命令式工作流。用�
 | 需求分发 | `managed-project-check` → `assignment-dispatch` |
 | 纳入跟踪 | `assignment-status`；只在用户再次主动启动 Control Sprint 时读取 |
 | 系统集成 | `delivery-verify` → `release-compose` → `test-deploy` → `test-integration` |
-| 发布 | `release-promote`；失败时 `integration-finding` 或 `release-rollback` |
+| 发布 | `release-promote`；失败时保留候选并固化 `integration-finding`；仅人员明确要求时规划 `release-rollback` |
 
 `assignment-dispatch` 从 Control `USER_STORIES.md` 的 Story 派生 `product` 或 `architecture` Assignment，并以 `source_reference` 保留追溯；消费工程也可从本地 Story/Task 派生 `dependency` Assignment。用户无需先手写 JSON 或直接运行 CLI。CLI 是 Skill/Agent 在 Step 0/2 调用的稳定执行端口，CI/Lint 是验证门禁，Commit/PR 是任务产物，均不是与 Sprint 并列的入口。Assignment 只写需求输入，不创建目标工程代码任务，也不修改其 Sprint 状态。
 
@@ -258,9 +306,12 @@ Hotfix 是线上事故专项 Sprint，允许创建 hotfix worktree，但仍复�
 | `prerequisites` | 必须全部满足的前置条件 | Step 0 PRE-FLIGHT |
 | `prerequisites_any` | 每组满足任意一个即可的前置条件（如 inline test 部署或独立 deploy-sprint） | Step 0 PRE-FLIGHT |
 | `artifact_action` | Python Action Registry 中的产物门禁 | Step 3 REVIEW / 闭环 |
+| `external_evidence.sprint_types` | 外部证据适用的 Sprint 类型；未列入的流程不读取该外部证据 | Step 0 PRE-FLIGHT |
 | `manual_steps` | 需用户手工完成的步骤 | Step 2 EXEC |
 
 Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 和 `review_protocol=agent-full|artifact-only`，并由 `harness task-context` 输出；规则可显式覆盖，但不得由 Agent 临时选择第二条执行链。`entry_action` / `execute.action` 统一通过 `task-action` 执行并写入当前 attempt 证据。独立 Review 后必须执行 `task-review`；`artifact_action` 只由 Review Gate 执行。旧 attempt、输入摘要变化、Action 失败、Review 非 PASS、报告或产物漂移均为硬阻断。
+
+`product`、`design`、`backend-design`、`frontend-design` 和 `library-design` attempt 会绑定 `ARCHITECTURE.md` 的 SHA-256，并由 `task-context.architecture` 暴露；架构内容变化后，旧 attempt 立即失效，必须重新通过任务 Preflight，Plan/Exec/Review 不得继续使用旧架构输入。
 
 验收项可显式写为 `{id, text}`；兼容字符串由 Runtime 生成确定性 ID，并通过 `task-context.acceptance` 暴露，Agent 不得自行编造或按数组序号引用。
 
@@ -272,17 +323,21 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 
 **生命周期必填字段**：`sprint_type`、远端 `base_ref`、不可变 `base_sha`、`branch`；另含目标、状态、验收标准、依赖、关联 User Story
 
-部署类 Sprint 额外声明 `source_sprints: [sprint-N-name, ...]`，用于绑定已批准的来源 Sprint、signoff 与提交；不得以接受报告目录非空代替。
+部署类 Sprint 额外声明 `source_sprints: [sprint-N-name, ...]`，用于绑定已批准的来源 Sprint、signoff 与提交；不得以接受报告目录非空代替。`walkthrough_env=test` 的 Feature Sprint 在自身验收前执行 Test 提升，不是已验收 Sprint 的部署编排，因此不读取 `source_sprints`，仍由当前计划依赖、分支与不可变提交约束交付来源。
 
-**任务表列**：`| ID | 类型 | 来源 | 父任务 | 任务描述 | 依赖 | 产出物 | 验收条件 | 状态 |`。激活后新增任务只能经 `harness sprint amend --reason`，且来源为 `scope-split|remediation`、父任务必须已存在。
+**任务表基础列**：`| ID | 类型 | 来源 | 父任务 | 任务描述 | 依赖 | 产出物 | 验收条件 | 状态 |`；`依赖` 填逗号分隔的任务 ID，无依赖写 `—`。激活后新增任务只能经 `harness sprint amend --reason`，且来源为 `scope-split|remediation`、父任务必须是 amend 前已激活任务。既有 ID 的 type/origin/parent 不可改变；尚无 attempt 的可选阶段任务可因影响面收缩而移除并进入 retired 审计。旧状态若缺少身份快照或 planning contract，必须先恢复激活时计划并执行 `harness sprint migrate-state <plan> --reason <迁移依据>`；新 Sprint 只允许激活 v3。
 
-**规则**：含 `code` 须包含 Phase 5-11（含 `product-acceptance` L3 走查）、任务依赖列含上游产出物路径、前端 `code` 依赖对应后端 `code`
+**影响面选择**：Feature Sprint 在 `impact_surfaces` 写明变化及理由；Runtime 依据 `task-rules.yml#impact_surface_requirements` 反推设计任务与 facets，并要求与任务表精确一致。fullstack 是项目能力，不代表三类设计全部必选；不能用省略任务代替“无影响”声明。
+
+`existing-boundaries-only` 是唯一不派生设计任务的影响面，仅适用于行为已由现有 PRD/设计/Architecture 覆盖、没有新边界或质量风险的实现增量；理由必须指明复用依据。product Review 若发现影响面不实，必须先 amend，不能继续 code。
+
+**规则**：含 `code` 须包含质量、产品走查和闭环任务；任务依赖列引用真实上游任务 ID，产出物列声明路径。前端 code 只有消费本次变化的后端契约时才依赖对应后端任务，不按 project.type 机械串行。
 
 ---
 
 ## 任务派生与前置条件
 
-`.harness/rules/task-rules.yml.sprint_type_sequences` 是不同 Sprint 流程的执行顺序真源，阶段以 `require: all|any` 明确全部完成或条件择一；`spawn_rules` 只负责派生建议。`harness sprint-gate` 在 Step 0 根据流程阶段、`prerequisites`、`prerequisites_any`、`external_evidence`、`upstream_outcome`、`readiness`、`approval_artifact` 和 `.harness/state/*` 执行硬校验。当前任务和必需前序阶段必须真实列入 Sprint，跨 Sprint 条件必须绑定具体输入证据。
+`.harness/rules/task-rules.yml.sprint_type_sequences` 是不同 Sprint 流程的执行顺序真源，阶段以 `require: all|any` 明确全部完成或条件择一；`optional: true` 的设计阶段允许按 PRD 影响面整体省略或只列适用任务，但已列任务必须全部完成。`spawn_rules` 只负责派生建议。`harness sprint-gate` 在 Step 0 根据流程阶段、`prerequisites`、`prerequisites_any`、`external_evidence`、`upstream_outcome`、`readiness`、`approval_artifact` 和 `.harness/state/*` 执行硬校验。当前任务和必需前序阶段必须真实列入 Sprint，跨 Sprint 条件必须绑定具体输入证据。
 
 编排者不得在 SPRINT.md 手写第二套派生链；需要变更流程时，优先修改 `task-rules.yml`，再只在本节补充流程解释。
 
@@ -320,7 +375,7 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 
 ## 任务执行约束
 
-1. **文档先行**：代码须有技术方案，禁止无方案编码
+1. **适用方案先行**：代码须依赖与真实影响面匹配的产品/技术方案；禁止无方案编码，也禁止为未变化的技术面生成占位方案
 2. **质量门禁**：代码须通过质量评分后才能发布
 3. **迭代增强优先**：Sprint N+1 在已交付模块上增强，禁止创建平行功能
 4. **浏览器 E2E 不可替代**：前端须 `webapp-testing` 或 `chrome-devtools` 验证
@@ -334,7 +389,7 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 |---|---|
 | PRD / 设计 / 技术方案 | 先读本次 User Story 与对应索引；只加载与当前需求强相关的历史文档。产出物是新的迭代文档，必须显式写清对旧设计的变更、优化、删除；不直接改旧 PRD/设计/技术方案。 |
 | 多份相关历史文档 | 优先选择最近更新、验证状态为 `verified` 的文档；若逻辑冲突，以更新且更贴近当前需求的文档为参考，并在新文档记录取舍。 |
-| Coding | 只读取本次迭代 PRD/设计/技术方案与项目编码规范；不得回读历史 PRD/设计/技术方案作为实现依据。历史变化必须已经沉淀在本次迭代文档中。 |
+| Coding | 存在适用技术方案时，只读取 `upstream_inputs` 投影出的本轮技术方案与项目编码规范；PRD/设计只作为技术方案上游，需求摘要仅做漂移校验。流程明确没有技术方案时，使用显式最近依赖与项目基线，不自行检索历史或补造方案。 |
 | 测试用例 | 与 Code 一样描述系统最新状态。生成前检索 `docs/test-cases/index.md` 与相关 YAML；业务流程变更时直接修改既有用例并更新 `last_modified_in` / `last_verified_in`，不得基于旧流程平行新增重复用例。 |
 
 ### 子任务拆分
@@ -353,8 +408,8 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 
 | 类型 | 触发 | 任务集 | worktree | 备注 |
 |------|------|--------|---------|------|
-| feature-sprint | 默认 | infra→…→code→test-case-gen→quality→product-acceptance→sprint-close→pr | 是 | `walkthrough_env=test` 时在 quality 前插入 promote-prep/build-image/promote-test |
-| deploy-sprint(test) | 项目要求测试发布 | promote-prep→build-image→promote-test→integration | 否 | 不开新分支，操作 `release-staging/<train>` |
+| feature-sprint | 默认 | infra→product→适用设计→code→test-case-gen→quality→product-acceptance→sprint-close→pr | 是 | 设计任务按影响面选择；`walkthrough_env=test` 时在 quality 前插入 build-image/promote-test/integration |
+| deploy-sprint(test) | 项目要求测试发布 | build-image→promote-test（自动 Preflight）→integration | 否 | 不开新分支，操作 `release-staging/<train>` |
 | deploy-sprint(prod) | 项目要求生产发布 | …→release-prep→migration-design+regression→release-approval(L3)→prod-deploy→back-merge→observe | 否 | 含强制 L3 |
 | hotfix | 线上故障 | hotfix-init→code→quality→prod-deploy→back-merge | 是 | 跳过 deploy-sprint 编排 |
 | library-sprint | 公共包能力变更 | library-design→library-code→library-quality→library-package→library-contract→library-delivery→library-close→library-pr | 是 | 仅 `project.type=library`；package Action 后才允许消费者契约 |
@@ -363,14 +418,15 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 
 1. **判定 Sprint 类型**：根据用户指令 + `config/harness.yml.walkthrough_env` 决定流程
 2. **deploy-sprint 启动**：feature-sprint `pr` 完成合并与安全清理后，按需启动 deploy-sprint（与 feature 互斥串行）
-3. **配置门禁**：promote-prep 必须先通过；`.harness/state/promote-prep-<env>.json ready=true` 才能 build-image
+3. **配置门禁**：`build-image` 只依赖固定且已批准的来源 commit；`promote-test` Preflight 即时执行环境准备检查，未就绪则禁止部署
 
 ### 关键状态文件
 
 ```
 .harness/state/
-├── promote-prep-<env>.json   # 部署配置就绪标记
+├── promote-prep-<env>.json   # promote-test 即时 Preflight/独立诊断结果
 ├── build-image-<sprint>.json # 镜像 tag + 构建结果
+├── promote-test/<sprint>/<task-id>/<run-id>.json # 当前提升 attempt 的不可变构建/部署回执
 ├── promote-<env>-<sprint>.json # promote 执行日志
 └── env-locks/<env>.lock      # 环境互斥锁
 ```

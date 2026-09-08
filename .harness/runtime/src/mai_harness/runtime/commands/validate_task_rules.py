@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mai_harness.runtime.application.migration_progress import policy_errors
 from mai_harness.runtime.domain.actions import resolve_action
+from mai_harness.runtime.domain.document_registry import REGISTRY_TASKS
 from mai_harness.runtime.domain.modes import PROJECT_TYPES
 from mai_harness.runtime.infrastructure.core.paths import PATHS
 from mai_harness.runtime.infrastructure.utils import load_yaml
@@ -62,6 +64,7 @@ def validate(doc: Any, root: Path) -> Validation:
         return result
     if not doc.get("version"):
         warning("缺少 version 字段")
+    result.errors.extend(policy_errors(doc.get("migration_execution_policy")))
     preflight = doc.get("sprint_preflight")
     if preflight and (not isinstance(preflight.get("ttl_seconds"), (int, float)) or preflight["ttl_seconds"] <= 0):
         error("sprint_preflight.ttl_seconds 必须是正数")
@@ -73,6 +76,53 @@ def validate(doc: Any, root: Path) -> Validation:
     tasks = doc.get("tasks") or {}
     if not tasks:
         error("tasks 为空")
+    input_projections = doc.get("task_input_projections", {})
+    if not isinstance(input_projections, dict):
+        error("task_input_projections 必须是对象")
+        input_projections = {}
+    for consumer, producers in input_projections.items():
+        path = f"task_input_projections.{consumer}"
+        if consumer not in tasks:
+            error(f"{path} 消费者任务不存在")
+        if (
+            not isinstance(producers, list)
+            or not producers
+            or not all(isinstance(item, str) and item for item in producers)
+            or len(producers) != len(set(producers))
+        ):
+            error(f"{path} 必须是无重复的非空任务类型数组")
+            continue
+        if unknown := set(producers) - set(tasks):
+            error(f"{path} 含未知生产者任务: {sorted(unknown)}")
+        if consumer in producers:
+            error(f"{path} 不得投影自身")
+    impact_requirements = doc.get("impact_surface_requirements")
+    if not isinstance(impact_requirements, dict) or not impact_requirements:
+        error("impact_surface_requirements 必须是非空对象")
+        impact_requirements = {}
+    for surface, definition in impact_requirements.items():
+        if not isinstance(surface, str) or not surface or not isinstance(definition, dict):
+            error(f"impact_surface_requirements.{surface} 格式非法")
+            continue
+        if set(definition) != {"tasks", "facets"}:
+            error(f"impact_surface_requirements.{surface} 必须仅包含 tasks/facets")
+            continue
+        required_tasks = definition.get("tasks")
+        facet_map = definition.get("facets")
+        if (
+            not isinstance(required_tasks, list)
+            or len(required_tasks) != len(set(required_tasks))
+            or not set(required_tasks) <= {"design", "backend-design", "frontend-design"}
+        ):
+            error(f"impact_surface_requirements.{surface}.tasks 必须是无重复的设计任务数组")
+            required_tasks = []
+        if not isinstance(facet_map, dict) or not set(facet_map) <= set(required_tasks):
+            error(f"impact_surface_requirements.{surface}.facets 只能引用本影响面的 tasks")
+            continue
+        for task_name, selected in facet_map.items():
+            supported = (tasks.get(task_name) or {}).get("facets") or []
+            if not isinstance(selected, list) or not selected or not set(selected) <= set(supported):
+                error(f"impact_surface_requirements.{surface}.facets.{task_name} 必须引用任务已声明 facets")
     mode_matrix = doc.get("mode_task_capabilities")
     if not isinstance(mode_matrix, dict) or set(mode_matrix) != {"standalone", "managed", "control"}:
         error("mode_task_capabilities 必须完整声明三种模式")
@@ -104,11 +154,93 @@ def validate(doc: Any, root: Path) -> Validation:
             error(f"sprint_type_task_capabilities.{sprint_type} 含未知任务: {sorted(unknown)}")
     if missing_sprint_types := set(tasks) - {name for names in sprint_matrix.values() for name in names}:
         error(f"以下任务未登记任何 sprint_type（默认拒绝）: {sorted(missing_sprint_types)}")
+    requirement_modes = doc.get("sprint_requirement_modes")
+    if not isinstance(requirement_modes, dict) or set(requirement_modes) != expected_sprint_types:
+        error(f"sprint_requirement_modes 必须完整声明: {sorted(expected_sprint_types)}")
+    else:
+        allowed_requirement_modes = {"stories", "non-product-change"}
+        for sprint_type, modes in requirement_modes.items():
+            if (
+                not isinstance(modes, list)
+                or not modes
+                or len(modes) != len(set(modes))
+                or not set(modes) <= allowed_requirement_modes
+            ):
+                error(f"sprint_requirement_modes.{sprint_type} 必须是合法且无重复的非空数组")
+        if requirement_modes.get("feature-sprint") != ["stories"]:
+            error("feature-sprint 必须且只能使用 stories")
+        if requirement_modes.get("control") != ["stories"]:
+            error("control 必须且只能使用 stories")
+    delivery_strategies = doc.get("delivery_strategies")
+    if not isinstance(delivery_strategies, dict) or not delivery_strategies:
+        error("delivery_strategies 必须是非空对象")
+        delivery_strategies = {}
+    for name, definition in delivery_strategies.items():
+        if not isinstance(name, str) or not isinstance(definition, dict):
+            error(f"delivery_strategies.{name} 必须是对象")
+            continue
+        outcomes = definition.get("observable_outcomes")
+        required = definition.get("required_outcomes", [])
+        if (
+            not isinstance(outcomes, list)
+            or not outcomes
+            or not all(isinstance(item, str) and item for item in outcomes)
+        ):
+            error(f"delivery_strategies.{name}.observable_outcomes 必须是非空字符串数组")
+            continue
+        if not isinstance(required, list) or not set(required) <= set(outcomes):
+            error(f"delivery_strategies.{name}.required_outcomes 必须是 observable_outcomes 子集")
+    delivery_contracts = doc.get("sprint_delivery_contracts")
+    if not isinstance(delivery_contracts, dict) or set(delivery_contracts) != expected_sprint_types:
+        error(f"sprint_delivery_contracts 必须完整声明: {sorted(expected_sprint_types)}")
+        delivery_contracts = {}
+    for sprint_type, contract in delivery_contracts.items():
+        if not isinstance(contract, dict) or set(contract) != {
+            "strategies",
+            "terminal_tasks",
+            "outcome_producer",
+        }:
+            error(f"sprint_delivery_contracts.{sprint_type} 必须仅包含 strategies/terminal_tasks/outcome_producer")
+            continue
+        strategies = contract.get("strategies")
+        terminal = contract.get("terminal_tasks")
+        if not isinstance(strategies, list) or not strategies or set(strategies) - set(delivery_strategies):
+            error(f"sprint_delivery_contracts.{sprint_type}.strategies 引用了未知策略")
+        if (
+            not isinstance(terminal, list)
+            or (sprint_matrix.get(sprint_type) and not terminal)
+            or set(terminal) - set(sprint_matrix.get(sprint_type, []))
+        ):
+            error(f"sprint_delivery_contracts.{sprint_type}.terminal_tasks 必须引用当前 Sprint 任务")
+        if contract.get("outcome_producer") not in {"boss-signoff", "task-review"}:
+            error(f"sprint_delivery_contracts.{sprint_type}.outcome_producer 非法")
     sequences = doc.get("sprint_type_sequences")
     if not isinstance(sequences, dict) or set(sequences) != expected_sprint_types:
         error(f"sprint_type_sequences 必须完整声明: {sorted(expected_sprint_types)}")
         sequences = {}
     for sprint_type, stages in sequences.items():
+        stage_shape_valid = isinstance(stages, list)
+        if stage_shape_valid:
+            for index, stage in enumerate(stages):
+                path = f"sprint_type_sequences.{sprint_type}[{index}]"
+                if not isinstance(stage, dict):
+                    error(f"{path} 必须是对象")
+                    stage_shape_valid = False
+                    continue
+                unknown_keys = set(stage) - {"tasks", "require", "optional", "terminal_candidates"}
+                if unknown_keys:
+                    error(f"{path} 包含未知字段: {sorted(unknown_keys)}")
+                    stage_shape_valid = False
+                if "optional" in stage and type(stage["optional"]) is not bool:
+                    error(f"{path}.optional 必须是布尔值")
+                    stage_shape_valid = False
+                if "terminal_candidates" in stage and (
+                    not isinstance(stage["terminal_candidates"], list)
+                    or not all(isinstance(item, str) and item for item in stage["terminal_candidates"])
+                    or len(stage["terminal_candidates"]) != len(set(stage["terminal_candidates"]))
+                ):
+                    error(f"{path}.terminal_candidates 必须是无重复字符串数组")
+                    stage_shape_valid = False
         stage_tasks = (
             [stage.get("tasks", []) if isinstance(stage, dict) else [] for stage in stages]
             if isinstance(stages, list)
@@ -118,6 +250,7 @@ def validate(doc: Any, root: Path) -> Validation:
         valid_names = all(isinstance(name, str) and name for name in flattened)
         if (
             not isinstance(stages, list)
+            or not stage_shape_valid
             or any(
                 not isinstance(stage, dict) or not isinstance(stage.get("tasks"), list) or not stage["tasks"]
                 for stage in stages
@@ -130,6 +263,59 @@ def validate(doc: Any, root: Path) -> Validation:
             error(
                 f"sprint_type_sequences.{sprint_type} 必须完整覆盖能力矩阵，且阶段含 tasks、require=all|any、任务不重复"
             )
+            continue
+        for index, stage in enumerate(stages):
+            legacy_tasks = [
+                name for name in stage["tasks"] if (tasks.get(name) or {}).get("lifecycle") == "legacy-only"
+            ]
+            if legacy_tasks and stage.get("optional") is not True:
+                error(
+                    f"sprint_type_sequences.{sprint_type}[{index}] 的 legacy-only 任务必须位于可选阶段: "
+                    f"{sorted(legacy_tasks)}"
+                )
+        expected_terminal = {
+            task for stage in stages for task in stage.get("terminal_candidates", []) if isinstance(task, str)
+        }
+        if (sprint_matrix.get(sprint_type) and not expected_terminal) or any(
+            set(stage.get("terminal_candidates", [])) - set(stage["tasks"]) for stage in stages
+        ):
+            error(f"sprint_type_sequences.{sprint_type} 必须声明属于所在阶段的 terminal_candidates")
+            continue
+        configured_terminal = set((delivery_contracts.get(sprint_type) or {}).get("terminal_tasks", []))
+        if configured_terminal != expected_terminal:
+            error(
+                f"sprint_delivery_contracts.{sprint_type}.terminal_tasks 必须等于最终阶段及 terminal_candidates: "
+                f"{sorted(expected_terminal)}"
+            )
+    scope_routes = doc.get("scope_conflict_routes")
+    responsible_scopes = {"story", "product", "design", "technical-design"}
+    if not isinstance(scope_routes, dict) or set(scope_routes) != expected_sprint_types:
+        error(f"scope_conflict_routes 必须完整声明: {sorted(expected_sprint_types)}")
+        scope_routes = {}
+    for sprint_type, routes in scope_routes.items():
+        if not isinstance(routes, dict) or set(routes) != responsible_scopes:
+            error(f"scope_conflict_routes.{sprint_type} 必须完整声明: {sorted(responsible_scopes)}")
+            continue
+        for scope, route in routes.items():
+            path = f"scope_conflict_routes.{sprint_type}.{scope}"
+            if not isinstance(route, dict) or len(route) != 1:
+                error(f"{path} 必须且只能声明 owner_tasks 或 transfer_to")
+                continue
+            if "owner_tasks" in route:
+                owners = route["owner_tasks"]
+                if (
+                    not isinstance(owners, list)
+                    or not owners
+                    or len(owners) != len(set(owners))
+                    or not set(owners) <= set(sprint_matrix.get(sprint_type, []))
+                ):
+                    error(f"{path}.owner_tasks 必须引用当前 Sprint 可执行任务")
+            elif "transfer_to" in route:
+                target = route["transfer_to"]
+                if target not in expected_sprint_types or target == sprint_type:
+                    error(f"{path}.transfer_to 必须引用其他已知 Sprint 类型")
+            else:
+                error(f"{path} 必须声明 owner_tasks 或 transfer_to")
     type_mode_matrix = doc.get("sprint_type_mode_capabilities")
     if not isinstance(type_mode_matrix, dict) or set(type_mode_matrix) != {"standalone", "managed", "control"}:
         error("sprint_type_mode_capabilities 必须完整声明三种模式")
@@ -227,6 +413,11 @@ def validate(doc: Any, root: Path) -> Validation:
                 roots = [item.strip().rstrip("/") for item in output_path.split(" 或 ")]
                 if "<" not in output_path and not any(index == root or index.startswith(root + "/") for root in roots):
                     error(f"tasks.{name}.outputs.index 不在 outputs.path 内: {index}")
+            if name in REGISTRY_TASKS:
+                expected_directory = REGISTRY_TASKS[name][0]
+                expected_index = f"docs/{expected_directory}/index.md"
+                if index != expected_index:
+                    error(f"tasks.{name}.outputs.index 必须使用作用域注册表: {expected_index}")
         allowed_project_types = task.get("allowed_project_types")
         if allowed_project_types is not None and (
             not isinstance(allowed_project_types, list)
@@ -243,6 +434,22 @@ def validate(doc: Any, root: Path) -> Validation:
             error(f"tasks.{name}.execution_protocol 非法")
         if task.get("review_protocol") not in {None, "agent-full", "artifact-only"}:
             error(f"tasks.{name}.review_protocol 非法")
+        if task.get("execution_contract") not in {None, "integration-v1"}:
+            error(f"tasks.{name}.execution_contract 非法")
+        if (
+            task.get("execution_contract") == "integration-v1"
+            and task.get("artifact_action") != "project.integration.guard"
+        ):
+            error(f"tasks.{name}.execution_contract=integration-v1 必须使用 project.integration.guard")
+        if (
+            task.get("execution_contract") == "integration-v1"
+            and task.get("entry_action") != "project.integration.execute"
+        ):
+            error(f"tasks.{name}.execution_contract=integration-v1 必须使用 project.integration.execute")
+        if name == "promote-test" and task.get("artifact_action") != "project.promote-test.guard":
+            error("tasks.promote-test 必须使用 project.promote-test.guard 校验当前部署 attempt")
+        if task.get("lifecycle") not in {None, "legacy-only"}:
+            error(f"tasks.{name}.lifecycle 只允许 legacy-only")
         acceptance_by_project_type = task.get("acceptance_by_project_type")
         if acceptance_by_project_type is not None:
             if not isinstance(acceptance_by_project_type, dict) or not set(acceptance_by_project_type) <= PROJECT_TYPES:
@@ -272,7 +479,10 @@ def validate(doc: Any, root: Path) -> Validation:
         if defaults_by_type is not None:
             if not isinstance(defaults_by_type, dict) or not set(defaults_by_type) <= PROJECT_TYPES:
                 error(f"tasks.{name}.default_facets_by_project_type 只能声明已知 project_type")
-            elif any(not isinstance(items, list) or not set(items) <= set(facets or []) for items in defaults_by_type.values()):
+            elif any(
+                not isinstance(items, list) or not set(items) <= set(facets or [])
+                for items in defaults_by_type.values()
+            ):
                 error(f"tasks.{name}.default_facets_by_project_type 必须只引用已声明 facets")
         acceptance_by_facet = task.get("acceptance_by_facet")
         if acceptance_by_facet is not None:
@@ -293,6 +503,10 @@ def validate(doc: Any, root: Path) -> Validation:
         for legacy in ("infra_ready", "entry_command", "artifact_guard"):
             if legacy in task:
                 error(f"tasks.{name}.{legacy} 已废弃，必须使用 Action Registry 字段")
+        if task.get("infra_cache") not in {None, "ttl", "never"}:
+            error(f"tasks.{name}.infra_cache 只允许 ttl/never")
+        if "infra_cache" in task and not task.get("infra_action"):
+            error(f"tasks.{name}.infra_cache 只能与 infra_action 同时声明")
         execute_parameters = (task.get("execute") or {}).get("parameters", [])
         if not isinstance(execute_parameters, list) or not all(
             isinstance(item, str) and item for item in execute_parameters
@@ -319,7 +533,7 @@ def validate(doc: Any, root: Path) -> Validation:
                     )
                     if phase not in action.phases:
                         error(f"{action_path} 不允许用于 {phase} 阶段")
-                    task_modes = set(task.get("allowed_modes") or {"standalone", "managed", "control"})
+                    task_modes = set(task.get("allowed_modes") or derived_modes)
                     if not task_modes <= action.modes:
                         error(f"{action_path} 不允许用于模式: {sorted(task_modes - action.modes)}")
                     if action_path.endswith("execute.action"):
@@ -357,10 +571,43 @@ def validate(doc: Any, root: Path) -> Validation:
         external = task.get("external_evidence")
         if external is not None and (
             not isinstance(external, dict)
+            or bool(
+                set(external)
+                - {
+                    "kind",
+                    "field",
+                    "sprint_types",
+                    "candidate_field",
+                    "require_head_match",
+                    "require_source_ancestry",
+                }
+            )
             or external.get("kind") != "sprint-signoffs"
             or not isinstance(external.get("field"), str)
+            or (
+                "candidate_field" in external
+                and (
+                    not isinstance(external["candidate_field"], str)
+                    or not external["candidate_field"]
+                    or type(external.get("require_head_match")) is not bool
+                    or type(external.get("require_source_ancestry")) is not bool
+                )
+            )
+            or ("candidate_field" not in external and set(external) & {"require_head_match", "require_source_ancestry"})
+            or (
+                "sprint_types" in external
+                and (
+                    not isinstance(external["sprint_types"], list)
+                    or not external["sprint_types"]
+                    or len(external["sprint_types"]) != len(set(external["sprint_types"]))
+                    or bool(set(external["sprint_types"]) - expected_sprint_types)
+                )
+            )
         ):
-            error(f"tasks.{name}.external_evidence 必须声明 kind=sprint-signoffs 和 field")
+            error(
+                f"tasks.{name}.external_evidence 必须声明 kind=sprint-signoffs、field，"
+                "且可选 Sprint 范围与 candidate commit 约束必须完整合法"
+            )
         outcome = task.get("upstream_outcome")
         if outcome is not None and (
             not isinstance(outcome, dict)

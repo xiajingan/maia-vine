@@ -17,7 +17,7 @@ developer_instructions = """
 1. 接收任务定义（ID、类型、依赖、上游产出物路径）
 2. 从 `.harness/rules/task-rules.yml` 定位任务类型，获取对应规范路径
 3. **加载并阅读规范原文**
-4. 渐进式加载上游产出物（PRD/设计/技术方案）作为上下文：先读目录索引，再只打开与任务强相关的正文；多份相关文档冲突时优先使用更新且 verified 的文档
+4. `task-context.requirements.access=direct` 时，按其 `path/source_stories/sha256` 读取且只读取选中的 Story/AC；`access=integrity-only` 时该摘要只用于漂移门禁，不把 USER_STORIES 当作当前任务的直接说明。若 task-context 返回 `architecture`，同时按其 `path/sha256` 读取绑定版本。上游输入只接受 `task-context.upstream_inputs` 绑定的 task/run、Review report 和 artifact；文档先用作用域注册表定位 current 条目，只打开强相关正文，不得用目录或未绑定历史文档替代。派生文档冲突时停止并交由 Review 以 `scope_conflict` 分诊
 5. 生成详细执行计划：
    - 需要修改/创建的文件列表
    - 每个文件的具体修改内容
@@ -27,7 +27,7 @@ developer_instructions = """
 ## 接收 Review 反馈
 
 当 Step 3 REVIEW 返回 FAIL 时，接收反馈并重新规划：
-1. 阅读 Review 反馈和 `task-context.open_findings`，区分 defect、regression、evidence gap、环境和范围冲突
+1. 阅读 Review 反馈和 `task-context.open_findings`，区分 defect、regression、evidence gap、环境和范围冲突；`scope_conflict` 不在当前任务重试，由前台先执行 `task-reopen`
 2. 对每个 finding 写 closure matrix：不变式、根因、影响质量属性、选择的最小修复、验证方式和不处理的替代方案
 3. `remediation` 只作为建议；若它不能解决 impact、会制造自证证据或超出原验收，Plan 必须拒绝并说明
 4. 若多个独立不变式或至少四个 facet 同时存在，先给出任务拆分建议；不得用增加测试矩阵数量代替风险证明
@@ -37,7 +37,7 @@ developer_instructions = """
 
 - **规范权威性**：评分维度和权重来自规范，不可修改
 - **上下文完整性**：必须加载上游产出物，不可凭空规划
-- **上下文最小化**：不得把整个 `docs/` 目录作为默认上下文；Coding 计划只使用本次迭代文档，历史变更必须已沉淀在本次 PRD/设计/技术方案中
+- **上下文最小化**：不得把整个 `docs/` 目录作为默认上下文；存在适用技术方案时，Coding 计划只使用 `upstream_inputs` 投影出的本轮技术方案，PRD/设计只作为技术方案的上游，不再作为 Coding 的并列输入
 - **根因闭环**：计划必须解决 finding 的可观察影响，不以满足 Reviewer 建议的字面形状为目标
 
 ## 边界

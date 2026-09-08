@@ -10,30 +10,32 @@
  */
 
 // ─── 分层架构定义 ───────────────────────────────────────────────────────────────
-// 文件后缀 → 层级映射（可通过项目约定覆盖）
-const LAYER_PATTERNS = {
-  ctrl:   /\.ctrl\.[jt]sx?$/,
-  svc:    /\.svc\.[jt]sx?$/,
-  repo:   /\.repo\.[jt]sx?$/,
-  types:  /(?:^|\/)types\.[jt]sx?$/,
-  config: /(?:^|\/)config\.[jt]sx?$/,
+// 默认 simple-layered Profile。项目可通过 rule options 提供 Architecture
+// 声明的层名、文件/导入模式和依赖方向，不强制所有项目使用这组名称。
+const DEFAULT_LAYERS = {
+  controller: {
+    display: 'Controller', filePattern: '\\.ctrl\\.[jt]sx?$', importPattern: '\\.ctrl\\b',
+    allow: ['service', 'types', 'config'],
+  },
+  service: {
+    display: 'Service', filePattern: '\\.svc\\.[jt]sx?$', importPattern: '\\.svc\\b',
+    allow: ['repository', 'types', 'config'],
+  },
+  repository: {
+    display: 'Repository', filePattern: '\\.repo\\.[jt]sx?$', importPattern: '\\.repo\\b',
+    allow: ['types', 'config'],
+  },
+  types: {
+    display: 'Types', filePattern: '(?:^|/)types\\.[jt]sx?$', importPattern: '(?:^|/)types(?:$|/)',
+    allow: [],
+  },
+  config: {
+    display: 'Config', filePattern: '(?:^|/)config\\.[jt]sx?$', importPattern: '(?:^|/)config(?:$|/)',
+    allow: [],
+  },
 };
 
-const LAYER_DISPLAY = {
-  ctrl: 'Controller', svc: 'Service', repo: 'Repository',
-  types: 'Types', config: 'Config',
-};
-
-// 每层允许导入的层（同层 + 下列清单 + providers/shared）
-const ALLOWED_IMPORTS = {
-  ctrl:   ['svc', 'types', 'config'],
-  svc:    ['repo', 'types', 'config'],
-  repo:   ['types', 'config'],
-  types:  [],
-  config: [],
-};
-
-// Service 层禁止导入的 HTTP 框架模块
+// 默认 simple-layered Profile 中 application/service 隔离的传输框架模块。
 const HTTP_MODULES = [
   'fastify', 'express', 'koa', 'hapi', 'http', 'https',
   '@fastify/', '@hono/', 'hono', 'next/server',
@@ -41,28 +43,59 @@ const HTTP_MODULES = [
 
 // ─── 检测函数 ───────────────────────────────────────────────────────────────────
 
-function detectLayer(filePath) {
-  for (const [name, pattern] of Object.entries(LAYER_PATTERNS)) {
-    if (pattern.test(filePath)) return name;
+function layerRules(options = {}) {
+  return options.layers || DEFAULT_LAYERS;
+}
+
+function compilePattern(pattern, label) {
+  try {
+    return new RegExp(pattern);
+  } catch (error) {
+    throw new TypeError(`harness/layer-imports 配置错误：${label} 不是合法正则 (${error.message})`);
+  }
+}
+
+function compileLayerPolicy(options = {}) {
+  const layers = layerRules(options);
+  const names = new Set(Object.keys(layers));
+  const compiledLayers = Object.fromEntries(Object.entries(layers).map(([name, rule]) => {
+    for (const target of rule.allow) {
+      if (!names.has(target)) {
+        throw new TypeError(`harness/layer-imports 配置错误：${name}.allow 引用了未知层 ${target}`);
+      }
+    }
+    return [name, {
+      file: compilePattern(rule.filePattern, `${name}.filePattern`),
+      imported: compilePattern(rule.importPattern, `${name}.importPattern`),
+    }];
+  }));
+  const isolated = options.transportIsolatedLayers || (names.has('service') ? ['service'] : []);
+  for (const name of isolated) {
+    if (!names.has(name)) {
+      throw new TypeError(`harness/layer-imports 配置错误：transportIsolatedLayers 引用了未知层 ${name}`);
+    }
+  }
+  return {
+    layers,
+    compiledLayers,
+    alwaysAllowed: (options.alwaysAllowedPatterns || ['(?:^|[/\\\\])(?:providers|shared)(?:[/\\\\]|$)'])
+      .map((pattern, index) => compilePattern(pattern, `alwaysAllowedPatterns[${index}]`)),
+    projectImports: (options.projectImportPatterns || ['^@/', '^~/', '^src/'])
+      .map((pattern, index) => compilePattern(pattern, `projectImportPatterns[${index}]`)),
+    transportIsolated: isolated,
+    transportModules: options.transportModules || HTTP_MODULES,
+  };
+}
+
+function detectLayer(value, policy, patternName) {
+  for (const [name, patterns] of Object.entries(policy.compiledLayers)) {
+    if (patterns[patternName].test(value)) return name;
   }
   return null;
 }
 
-function detectImportLayer(importSource) {
-  if (/\.ctrl\b/.test(importSource)) return 'ctrl';
-  if (/\.svc\b/.test(importSource)) return 'svc';
-  if (/\.repo\b/.test(importSource)) return 'repo';
-  if (/(?:^|\/)types$/.test(importSource) || /\/types['"]/.test(importSource)) return 'types';
-  if (/(?:^|\/)config$/.test(importSource) || /\/config['"]/.test(importSource)) return 'config';
-  return null;
-}
-
-function isHttpModule(source) {
-  return HTTP_MODULES.some(mod => source === mod || source.startsWith(mod));
-}
-
-function isProviderOrShared(source) {
-  return /(?:^|[/\\])(?:providers|shared)(?:[/\\]|$)/.test(source);
+function isProjectImport(source, policy) {
+  return source.startsWith('.') || policy.projectImports.some(pattern => pattern.test(source));
 }
 
 // ─── 密钥检测模式 ───────────────────────────────────────────────────────────────
@@ -85,7 +118,7 @@ const SQL_KEYWORDS = /\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EX
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default {
-  meta: { name: 'eslint-plugin-harness', version: '1.1.0' },
+  meta: { name: 'eslint-plugin-harness', version: '1.2.0' },
   rules: {
 
     // ─── H-01: 分层架构强制执行 ─────────────────────────────────────────────────
@@ -93,51 +126,77 @@ export default {
       meta: {
         type: 'problem',
         docs: {
-          description: '强制执行分层架构依赖方向：Controller → Service → Repository → Types/Config',
+          description: '根据项目 Architecture Profile 强制执行分层依赖方向',
         },
         messages: {
           layerViolation:
             '{{ currentLayer }} 层不允许导入 {{ importLayer }} 层。' +
             '允许的依赖：{{ allowed }}。' +
-            '请将此逻辑移至正确层级，或通过 providers/ 接口解耦。' +
-            '参考 docs/CODING_BACKEND.md §分层设计 / PROJECT_RULES.md §后端 #8-#10。',
+            '请将此逻辑移至正确边界，或同步修正 ARCHITECTURE.md 与 ESLint architecture policy。',
           httpInService:
-            'Service 层禁止导入 HTTP 模块「{{ source }}」。' +
-            'Service 只处理业务逻辑，不感知传输层（Request/Response）。' +
-            '请将 HTTP 操作移至 Controller 层，Service 通过参数接收纯数据。' +
-            '参考 docs/CODING_BACKEND.md §分层设计 / PROJECT_RULES.md §后端 #9。',
+            '当前层按 Architecture Profile 与传输框架隔离，不允许导入「{{ source }}」。' +
+            '请把传输适配移至项目声明的 adapter/delivery 边界。',
         },
-        schema: [],
+        schema: [{
+          type: 'object',
+          properties: {
+            layers: {
+              type: 'object',
+              minProperties: 1,
+              additionalProperties: {
+                type: 'object',
+                required: ['filePattern', 'importPattern', 'allow'],
+                properties: {
+                  display: { type: 'string' },
+                  filePattern: { type: 'string' },
+                  importPattern: { type: 'string' },
+                  allow: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+                },
+                additionalProperties: false,
+              },
+            },
+            alwaysAllowedPatterns: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+            projectImportPatterns: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+            transportIsolatedLayers: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+            transportModules: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+          },
+          additionalProperties: false,
+        }],
       },
       create(context) {
+        const options = context.options[0] || {};
+        const policy = compileLayerPolicy(options);
+        const layers = policy.layers;
         const filename = context.filename || context.getFilename();
-        const currentLayer = detectLayer(filename);
+        const currentLayer = detectLayer(filename, policy, 'file');
         if (!currentLayer) return {};
 
-        const allowed = ALLOWED_IMPORTS[currentLayer] || [];
+        const allowed = layers[currentLayer]?.allow || [];
 
         return {
           ImportDeclaration(node) {
             const source = node.source.value;
-            if (isProviderOrShared(source)) return;
+            if (policy.alwaysAllowed.some(pattern => pattern.test(source))) return;
 
-            // Service 层禁止 HTTP 模块
-            if (currentLayer === 'svc' && isHttpModule(source)) {
+            if (
+              policy.transportIsolated.includes(currentLayer)
+              && policy.transportModules.some(mod => source === mod || source.startsWith(mod))
+            ) {
               context.report({ node, messageId: 'httpInService', data: { source } });
               return;
             }
 
-            // 相对导入的层级违规检查
-            if (source.startsWith('.')) {
-              const importLayer = detectImportLayer(source);
+            // 相对路径与项目显式 alias 使用同一依赖方向检查；外部包不猜测层级。
+            if (isProjectImport(source, policy)) {
+              const importLayer = detectLayer(source, policy, 'imported');
               if (importLayer && importLayer !== currentLayer && !allowed.includes(importLayer)) {
                 context.report({
                   node,
                   messageId: 'layerViolation',
                   data: {
-                    currentLayer: LAYER_DISPLAY[currentLayer],
-                    importLayer: LAYER_DISPLAY[importLayer],
-                    allowed: [currentLayer, ...allowed].map(l => LAYER_DISPLAY[l] || l).join('、'),
+                    currentLayer: layers[currentLayer]?.display || currentLayer,
+                    importLayer: layers[importLayer]?.display || importLayer,
+                    allowed: [currentLayer, ...allowed].map(l => layers[l]?.display || l).join('、'),
                   },
                 });
               }

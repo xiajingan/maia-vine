@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 
@@ -56,11 +57,24 @@ def create_pipeline_plan(
     ]
     if not nodes:
         raise ValueError(f"environment has no deployment nodes: {env}")
+    node_ids = [node.get("id") for node in nodes if isinstance(node, dict)]
+    if (
+        len(node_ids) != len(nodes)
+        or len(set(node_ids)) != len(node_ids)
+        or not all(
+            isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", item) for item in node_ids
+        )
+        or not all(isinstance(node.get("deploy_target"), str) and node["deploy_target"].strip() for node in nodes)
+    ):
+        raise ValueError("deployment node id 必须安全且唯一，deploy_target 必须非空")
     strategy = environment.get("strategy", "serial")
     if strategy not in {"serial", "rolling", "blue-green"}:
         raise ValueError(f"unsupported deployment strategy: {strategy}")
     if strategy == "blue-green" and not environment.get("traffic_switch_adapter"):
         raise ValueError("blue-green requires environments.<env>.traffic_switch_adapter")
+    failure_threshold = environment.get("failure_threshold", 0)
+    if type(failure_threshold) is not int or not 0 <= failure_threshold < len(nodes):
+        raise ValueError(f"failure_threshold must satisfy 0 <= value < node count ({len(nodes)})")
     plan = {
         "version": 2,
         "env": env,
@@ -70,7 +84,7 @@ def create_pipeline_plan(
         "strategy": strategy,
         "strategy_config": {
             "batch_size": environment.get("batch_size", 1),
-            "failure_threshold": environment.get("failure_threshold", 0),
+            "failure_threshold": failure_threshold,
             "traffic_switch_adapter": environment.get("traffic_switch_adapter", ""),
         },
         "targets": targets,

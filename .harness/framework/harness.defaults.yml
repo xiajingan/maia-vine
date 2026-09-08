@@ -13,6 +13,12 @@ agent_runtime:
 task_execution:
   max_review_retries: 2
 
+planning:
+  # 新工程保持 greenfield，直到领域框架完成并由项目负责人显式切换为 established。
+  project_stage: greenfield
+  minimum_bootstrap_domains: 3
+  bootstrap_completion_receipt: docs/architecture/bootstrap-completion.yml
+
 walkthrough_env: development
 gates:
   ui_design_l3: false
@@ -52,15 +58,18 @@ command_conditions:
   frontend_unit: {file_exists: package.json, package_scripts: [test:unit]}
   e2e: {file_exists: package.json, package_dependencies: ["@playwright/test"], package_scripts: [test:e2e]}
 
+architecture:
+  # Python 与 JS/TS lint、ARCHITECTURE.md 都必须消费这一处 Profile 真源。
+  profile: simple-layered
+
 python_architecture:
   source_roots: [src]
-  layers:
-    controller: {directories: [controllers, api, routes], allow: [service, types, config, shared]}
-    service: {directories: [services], allow: [repository, types, config, shared]}
-    repository: {directories: [repositories], allow: [types, config, shared]}
-    types: {directories: [types, schemas], allow: [types, config, shared]}
-    config: {directories: [config], allow: [config, shared]}
-    shared: {directories: [shared, common, lib], allow: [shared, types, config]}
+  # 内置 Profile 由 Runtime 解析；只有 profile=custom 时填写并整体替换 layers。
+  layers: {}
+
+observability:
+  # 仅声明当前项目/架构确实适用的资产；空数组表示不强制创建虚假资产。
+  required_assets: []
 
 automation:
   enabled: true
@@ -129,6 +138,17 @@ quality:
   action_evidence:
     command: ""
     artifact: ""
+    execution_policy:
+      enabled: false
+      execution_evidence_version: 1
+      e2e_artifact: ""
+      executed_dispositions: []
+      deferred_dispositions: []
+      excluded_dispositions: []
+      live_dispositions: []
+      passing_dispositions: []
+      zero_execution_profiles: []
+      zero_execution_outcomes: []
   # Shared quality runtime is explicitly opt-in. An empty command preserves the
   # legacy per-dimension execution path for every existing project.
   runtime:
@@ -145,11 +165,12 @@ quality:
     artifact_type: harness.backend-performance
     test_node: ""
     identity_paths: [src, tests, scripts, config, pyproject.toml]
-    min_elapsed_seconds: 300
-    duration_tolerance_seconds: 2
-    timeout_seconds: 900
-    target_concurrency: 50
-    max_p99_seconds: 8
+    # 启用 command 时必须由项目 SLO/风险显式填写，Harness 不提供跨项目数字。
+    min_elapsed_seconds: null
+    duration_tolerance_seconds: null
+    timeout_seconds: null
+    target_concurrency: null
+    max_p99_seconds: null
     count_fields: [total_requests, sample_count]
     zero_fields: [cross_talk, pending, leak_count]
     categories: []
@@ -160,7 +181,8 @@ quality:
     health: {label: 服务健康, weight: 5, applies_to: [backend, fullstack]}
     e2e: {label: E2E 测试, weight: 15, applies_to: [frontend, fullstack]}
     ui_parity: {label: UI 还原度, weight: 25, applies_to: [fullstack, frontend]}
-    performance: {label: 性能基线, weight: 10, applies_to: [backend, frontend, fullstack]}
+    # 项目存在 Architecture/PRD 性能目标时显式填写 applies_to 并配置 producer。
+    performance: {label: 性能基线, weight: 10, applies_to: []}
 
 worktree:
   root: .harness/worktrees

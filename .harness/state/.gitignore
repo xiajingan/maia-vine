@@ -5,6 +5,9 @@ tasks/
 sprints/
 dependency-sessions/
 library-packages/
+requirements/*
+!requirements/confirmations/
+!requirements/confirmations/*.json
 !.gitignore
 !README.md
 !harness-version.txt

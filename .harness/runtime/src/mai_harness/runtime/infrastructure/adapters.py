@@ -50,7 +50,6 @@ class HelmAdapter:
             namespace,
             "--kube-context",
             self.context,
-            "--atomic",
             "--wait",
         ]
         if self.kubeconfig:

@@ -51,7 +51,7 @@ def main() -> int:
     plan.parent.mkdir(parents=True, exist_ok=True)
     if not plan.exists():
         plan.write_text(
-            f"# Hotfix 计划：{args.issue_id}\n\n- 严重度：{args.severity}\n- 基线 tag：{tag}\n- 分支：hotfix/{args.issue_id}\n\n## 现象\n\n<必填>\n\n## 根因\n\n<必填>\n\n## 修复方案\n\n<必填>\n\n## 验证\n\n- [ ] 回归测试\n- [ ] test 冒烟\n- [ ] L3 审批\n\n## 部署与回滚\n\n- 部署：`uv run --project .harness/runtime harness deploy --env prod`\n- 回滚：`uv run --project .harness/runtime harness deploy rollback --env prod`\n",
+            f"# Hotfix 计划：{args.issue_id}\n\n- 严重度：{args.severity}\n- 基线 tag：{tag}\n- 分支：hotfix/{args.issue_id}\n\n## 现象\n\n<必填>\n\n## 根因\n\n<必填>\n\n## 修复方案\n\n<必填>\n\n## 验证\n\n- [ ] 回归测试\n- [ ] test 冒烟\n- [ ] L3 审批\n\n## 部署与回滚\n\n- 部署：`uv run --project .harness/runtime harness deploy --env prod`\n- 回滚：仅在人员明确要求并生成 authorization 后执行 `uv run --project .harness/runtime harness deploy rollback --env prod --authorization <path>`\n",
             encoding="utf-8",
         )
     print(f"✅ hotfix/{args.issue_id}（基于 {tag}）；计划：{plan}")

@@ -44,8 +44,18 @@ Compose 字段；`cloud-native` 使用 Kubernetes context、cluster identity、n
 | 层 | 触发点 | 范围 | 强制脚本 |
 |----|--------|------|----------|
 | **L1 单元 + smoke E2E + P0 回归** | feature-sprint `quality` | 本 sprint 新增/修改 case；历史 P0 case；UI 还原度 + 主流程 smoke | `quality_score.py --level L1` |
-| **L2 集成 + 跨服务 E2E** | deploy-sprint(test) 的 `integration` | 全量集成、Mock-free | `quality_score.py --level L2` |
+| **L2 真实环境集成** | deploy-sprint(test) 的 `integration` | 按 facets 执行数据、Schema、环境、外部系统处理及部署后验证，Mock-free | `quality_score.py --level L2` |
 | **L3 回归 + 性能 + 安全** | deploy-sprint(prod) 的 `regression` | 全 sprint 聚合，critical regression | `quality_score.py --level L3` + `release.py regression` |
+
+`integration` 是真实环境处理与验证任务，不是新的代码实现阶段。计划按需选择
+`data/schema/environment/external/verification/performance/observability` facets；任务可以通过已评审 producer、adapter
+或 runbook 清洗/修正数据、执行 DDL、修正环境并验证外部系统，但不得修改源码、规范、commit、镜像或其他不可变
+交付制品。所有写操作必须记录目标、范围、checkpoint、前后状态与最终健康结果；只读复验默认仅选择
+`verification`。涉及 Test 迁移 producer 时才声明 `config/harness.yml#integration.migration`，具体合同见
+`MIGRATION.md`。新任务必须在 Sprint 行显式声明 facets；只读任务不得声明 producer，任何 producer 都进入写入
+合同并必须引用 `config.commands` 中的 argv、声明 checkpoint 和失败策略。producer 在低于 Action 上限的受控
+超时内运行，超时会终止进程组并留下失败状态。Review 使用 `<task-id>/receipt.yml` 结构化回执机械校验当前
+`promote-test` attempt 的 delivery identity、操作证据摘要和工作区保护快照。
 
 ---
 
@@ -59,7 +69,9 @@ Phase 1（Docker Compose + ssh）默认 `HARNESS_DELIVERY_MODE=artifact`：构�
 
 ### 本地执行入口
 
-Sprint 生命周期只认 `.harness/rules/task-rules.yml` 中的任务：`promote-prep`、`build-image`、`promote-test`、`prod-deploy`。本地简化命令可以存在，但必须挂到这些任务之一，复用相同输入检查，并写出相同 `.harness/state/*.json` 门控文件；未接入 task-rules 的包装脚本不得写入 Sprint 主流程。
+Sprint 生命周期只认 `.harness/rules/task-rules.yml` 中的任务：`build-image`、`promote-test`、`integration`、`prod-deploy`。本地简化命令可以存在，但必须挂到这些任务之一，复用相同输入检查，并写出相同 `.harness/state/*.json` 门控文件；未接入 task-rules 的包装脚本不得写入 Sprint 主流程。`harness promote-prep <env>` 保留为独立诊断命令及旧 Sprint 兼容入口，但新 Sprint 不得规划同名任务；`promote-test` Preflight 会自动执行 Test 环境准备检查。
+
+`build-image` 在 deploy-sprint(test) 中把 `base_sha` 作为唯一候选，要求全部源 Sprint 审批 commit 都是其祖先且当前 `HEAD` 完全一致，并把完整 commit、signoff 摘要以及每个本地 artifact SHA-256 或 registry digest 写入构建状态。`promote-test` 会再次验证同一身份；其交付事实来自显式绑定 Sprint/task attempt 和同一组制品的 `harness deploy --env test`，部署后生成 run-scoped 不可变回执供 Review Gate 只读校验。`harness promote test` 的历史分支/MR 编排不能替代真实环境部署；L2 integration 只消费当前 run 回执，并再次要求 `HEAD` 与部署 commit 相同，在 deploy 成功后作为独立 `integration` 任务执行，避免误用历史部署状态或把后序测试写成 promote 的循环验收条件。
 
 `harness pipeline` 是平台无关的组合入口：`plan` 解析部署基准线，`run` 调用上述既有任务脚本，`resume/status` 读取 `.harness/pipeline/runs/<run-id>.json`。当前为基础版本：未具备 target digest/artifact SHA、stage input hash 和 previous-stable manifest 证据前，不得替代既有 production 发布门禁。GitLab/GitHub workflow 只能调用该入口或相同底层任务，不另写一套发布语义。
 
@@ -102,10 +114,10 @@ Heartbeat 同样只认 `harness heartbeat`。Codex Scheduled Task、cron/launchd
 - 一致性：`harness secrets-sync-check` 在 quality.yml L1 强制校验 `secrets_source` 与本地 shell 文件约定是否一致；部署前再跑 runtime preflight。
 - 字面值扫描：`harness secrets-scan`。
 
-### 自动回滚
+### 失败续跑与人工回滚
 
-- `deploy.py watch --env prod --window 30m` 周期 health 检测 → 失败触发 `deploy.py rollback`。
-- rollback 从 `.harness/state/promotion-log.yml` 取上一稳定 tag 重新部署。
+- 部署、质量、启动或健康检查失败时保留当前业务候选与候选数据，记录失败证据，修复后继续验证，不自动回滚。
+- `deploy rollback` / `pipeline rollback` / `control release-rollback` 必须提供人员在当前主交互中明确确认后生成的 `source: ask_user` authorization，且 receipt 必须绑定目标 Release/tag；缺失或不匹配时 fail-closed。
 
 ---
 
@@ -128,4 +140,4 @@ Heartbeat 同样只认 `harness heartbeat`。Codex Scheduled Task、cron/launchd
 | promotion 链断裂（label 缺失） | `docker buildx imagetools inspect <tag>` |
 | sprint 未抵 test 但 release init 过 | 检查 `boss-signoff.yml` 的 `commit_sha` 字段 |
 | back-merge 冲突 | production.yml 已 `continue-on-error`；查 `back-merge/*` 分支人工合 |
-| prod 部署失败 | `deploy.py rollback --env prod`（自动）；查 `.harness/state/promotion-log.yml` |
+| prod 部署失败 | 保留候选并查部署状态证据，修复后继续；只有人员明确要求并提供 authorization 时才发布回滚 |

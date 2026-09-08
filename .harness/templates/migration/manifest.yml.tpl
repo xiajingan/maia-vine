@@ -2,6 +2,14 @@ version: 1
 release: vX.Y.Z
 created_at: ""
 created_by: ""
+execution:
+  business_upgrade_rollback: forbidden
+  progress_model: checkpoint
+  candidate_on_failure: preserve
+  resume_from: last-committed-checkpoint
+  data_rollback: forbidden
+  failure_phases: [migration, quality-check, service-start, release]
+  rollback_authority: explicit-human-release-rollback
 items:
   - id: 001-example
     description: ""

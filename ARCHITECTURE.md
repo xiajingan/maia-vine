@@ -1,5 +1,7 @@
 # Vine 架构
 
+**当前 Profile**：`simple-layered`
+
 > Vine 是嵌入受管业务客户端的 Vue 3 H5 终端工作流界面，不是通用管理端或权限服务。
 
 ## 1. 定位与边界

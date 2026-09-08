@@ -9,6 +9,7 @@ export interface PlaywrightRuntime {
   apiBaseUrl: string
   webBaseUrl: string
   reuseExistingServer: boolean
+  useWebServer: boolean
 }
 
 const API_BASE_URL_ENV_NAMES = [
@@ -36,6 +37,10 @@ function readPort(name: 'PLAYWRIGHT_API_PORT' | 'PLAYWRIGHT_WEB_PORT', fallback:
 
 function readReuseExistingServer(): boolean {
   return process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === 'true'
+}
+
+function readUseWebServer(): boolean {
+  return process.env.E2E_USE_WEBSERVER !== '0'
 }
 
 function readFirstDefinedEnvValue(names: readonly string[]): string | null {
@@ -82,5 +87,6 @@ export function getPlaywrightRuntime(): PlaywrightRuntime {
     apiBaseUrl: readApiBaseUrl(apiPort),
     webBaseUrl: readWebBaseUrl(webPort),
     reuseExistingServer: readReuseExistingServer(),
+    useWebServer: readUseWebServer(),
   }
 }

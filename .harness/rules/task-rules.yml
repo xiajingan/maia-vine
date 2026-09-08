@@ -6,7 +6,17 @@
 # review_spec = Step 3 额外加载的审查规范（可选），与 acceptance 条件共同使用。
 # REVIEW FAIL → 回到 Step 1 重新规划。
 
-version: "1.7"
+version: "2.0"
+
+# 业务升级与数据迁移是 checkpoint 驱动的长任务。该对象投影 Python 安全下限，failure_phases 可扩展。
+migration_execution_policy:
+  business_upgrade_rollback: forbidden
+  progress_model: checkpoint
+  candidate_on_failure: preserve
+  resume_from: last-committed-checkpoint
+  data_rollback: forbidden
+  failure_phases: [migration, quality-check, service-start, release]
+  rollback_authority: explicit-human-release-rollback
 
 # ─── Sprint 级 Preflight ─────────────────────────────────────────────────────
 # Sprint 计划确认后、第一个任务执行前执行一次。失败时 ask_user 引导修复。
@@ -16,6 +26,44 @@ sprint_preflight:
   ttl_seconds: 1800
   on_failure: "ask_user 展示失败项 → 引导用户修复 → 重试至通过"
 
+# planning contract v3 对需求输入的显式策略。stories 绑定 USER_STORIES；
+# non-product-change 只允许没有产品行为变化的部署、维护、事故或内部治理工作。
+sprint_requirement_modes:
+  feature-sprint: [stories]
+  control: [stories]
+  maintenance: [stories, non-product-change]
+  hotfix: [stories, non-product-change]
+  library-sprint: [stories, non-product-change]
+  deploy-sprint-test: [non-product-change]
+  deploy-sprint-prod: [non-product-change]
+
+# 下游 attempt 的直接产物输入投影。仅当依赖闭包中存在所列生产者时启用；
+# 没有技术方案任务的 maintenance/hotfix 保留显式最近依赖，不虚构设计任务。
+# Sprint Gate 仍验证完整依赖闭包，因此上游需求/PRD 漂移会经技术方案 attempt 阻断 Coding。
+task_input_projections:
+  code: [backend-design, frontend-design]
+  library-code: [library-design]
+
+# Feature planning contract v2/v3 的影响面到设计任务/facet 映射。Runtime 在 activate 前
+# 要求计划任务集合与此映射精确一致：未声明影响面不能多做设计，已声明也不能省略。
+impact_surface_requirements:
+  existing-boundaries-only: {tasks: [], facets: {}}
+  ui: {tasks: [design, frontend-design], facets: {}}
+  frontend: {tasks: [frontend-design], facets: {}}
+  backend: {tasks: [backend-design], facets: {}}
+  data: {tasks: [backend-design], facets: {backend-design: [data]}}
+  external-integration: {tasks: [backend-design], facets: {backend-design: [integration]}}
+  concurrency: {tasks: [backend-design], facets: {backend-design: [concurrency]}}
+  backend-security: {tasks: [backend-design], facets: {backend-design: [security]}}
+  observability: {tasks: [backend-design], facets: {backend-design: [observability]}}
+  shared-capability: {tasks: [backend-design], facets: {backend-design: [shared-capability]}}
+  routing: {tasks: [frontend-design], facets: {frontend-design: [routing]}}
+  frontend-performance: {tasks: [frontend-design], facets: {frontend-design: [performance]}}
+  analytics: {tasks: [frontend-design], facets: {frontend-design: [analytics]}}
+  frontend-security: {tasks: [frontend-design], facets: {frontend-design: [security]}}
+  responsive: {tasks: [design, frontend-design], facets: {frontend-design: [responsive]}}
+  state-machine: {tasks: [frontend-design], facets: {frontend-design: [state-machine]}}
+
 # 单一任务权限矩阵。未登记任务默认拒绝，避免新增任务失败开放。
 mode_task_capabilities:
   standalone: [infra, product, design, backend-design, frontend-design, dependency-change, code, test-case-gen, quality, pr, product-acceptance, sprint-close, library-design, library-code, library-contract, library-quality, library-package, library-delivery, library-close, library-pr, observe, promote-prep, build-image, promote-test, integration, release-prep, migration-design, regression, release-approval, prod-deploy, hotfix-init, back-merge]
@@ -24,7 +72,7 @@ mode_task_capabilities:
 
 # Sprint 类型与任务能力矩阵。Sprint 计划必须显式声明 `sprint_type:`；未登记类型和任务默认拒绝。
 sprint_type_task_capabilities:
-  feature-sprint: [infra, product, design, backend-design, frontend-design, dependency-change, code, test-case-gen, quality, pr, product-acceptance, sprint-close]
+  feature-sprint: [infra, product, design, backend-design, frontend-design, dependency-change, code, test-case-gen, promote-prep, build-image, promote-test, integration, quality, pr, product-acceptance, sprint-close]
   deploy-sprint-test: [promote-prep, build-image, promote-test, integration]
   deploy-sprint-prod: [release-prep, migration-design, regression, release-approval, prod-deploy, back-merge, observe]
   hotfix: [hotfix-init, code, quality, prod-deploy, back-merge, observe]
@@ -34,13 +82,53 @@ sprint_type_task_capabilities:
 
 # 流程顺序真源。任务必须按阶段递增；同一阶段可并行或按条件选择，未列入当前 Sprint 的可选任务不构成前置。
 sprint_type_sequences:
-  feature-sprint: [{tasks: [infra]}, {tasks: [product]}, {tasks: [design]}, {tasks: [backend-design, frontend-design], require: all}, {tasks: [dependency-change], optional: true}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close]}, {tasks: [pr]}]
-  deploy-sprint-test: [{tasks: [promote-prep]}, {tasks: [build-image]}, {tasks: [promote-test]}, {tasks: [integration]}]
-  deploy-sprint-prod: [{tasks: [release-prep]}, {tasks: [migration-design, regression], require: all}, {tasks: [release-approval]}, {tasks: [prod-deploy]}, {tasks: [back-merge]}, {tasks: [observe]}]
-  hotfix: [{tasks: [hotfix-init]}, {tasks: [code]}, {tasks: [quality]}, {tasks: [prod-deploy]}, {tasks: [back-merge]}, {tasks: [observe]}]
-  control: [{tasks: [managed-project-check]}, {tasks: [assignment-dispatch]}, {tasks: [assignment-status]}, {tasks: [delivery-verify]}, {tasks: [release-compose]}, {tasks: [test-deploy]}, {tasks: [test-integration]}, {tasks: [integration-finding, release-promote], require: any}, {tasks: [release-rollback]}]
-  maintenance: [{tasks: [infra]}, {tasks: [dependency-change], optional: true}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close]}, {tasks: [pr]}]
-  library-sprint: [{tasks: [library-design]}, {tasks: [library-code]}, {tasks: [library-quality]}, {tasks: [library-package]}, {tasks: [library-contract]}, {tasks: [library-delivery]}, {tasks: [library-close]}, {tasks: [library-pr]}]
+  # UI 与前后端技术方案按任务真实影响面选择；optional+require=all 表示“未选择可跳过，已列入的全部完成”。
+  feature-sprint: [{tasks: [infra]}, {tasks: [product]}, {tasks: [design], optional: true}, {tasks: [backend-design, frontend-design], require: all, optional: true}, {tasks: [dependency-change], optional: true}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [promote-prep], optional: true}, {tasks: [build-image], optional: true}, {tasks: [promote-test], optional: true}, {tasks: [integration], optional: true}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close], terminal_candidates: [sprint-close]}, {tasks: [pr]}]
+  deploy-sprint-test: [{tasks: [promote-prep], optional: true}, {tasks: [build-image]}, {tasks: [promote-test]}, {tasks: [integration], terminal_candidates: [integration]}]
+  deploy-sprint-prod: [{tasks: [release-prep]}, {tasks: [migration-design, regression], require: all}, {tasks: [release-approval]}, {tasks: [prod-deploy]}, {tasks: [back-merge]}, {tasks: [observe], terminal_candidates: [observe]}]
+  hotfix: [{tasks: [hotfix-init]}, {tasks: [code]}, {tasks: [quality]}, {tasks: [prod-deploy]}, {tasks: [back-merge]}, {tasks: [observe], terminal_candidates: [observe]}]
+  control: [{tasks: [managed-project-check]}, {tasks: [assignment-dispatch]}, {tasks: [assignment-status]}, {tasks: [delivery-verify]}, {tasks: [release-compose]}, {tasks: [test-deploy]}, {tasks: [test-integration]}, {tasks: [integration-finding, release-promote], require: any, terminal_candidates: [release-promote]}, {tasks: [release-rollback], terminal_candidates: [release-rollback]}]
+  maintenance: [{tasks: [infra]}, {tasks: [dependency-change], optional: true}, {tasks: [code]}, {tasks: [test-case-gen]}, {tasks: [quality]}, {tasks: [product-acceptance]}, {tasks: [sprint-close], terminal_candidates: [sprint-close]}, {tasks: [pr]}]
+  library-sprint: [{tasks: [library-design]}, {tasks: [library-code]}, {tasks: [library-quality]}, {tasks: [library-package]}, {tasks: [library-contract]}, {tasks: [library-delivery]}, {tasks: [library-close], terminal_candidates: [library-close]}, {tasks: [library-pr]}]
+
+# Review 的责任域回退路线。owner_tasks 从当前 Sprint 的对应阶段重新开始；transfer_to 表示
+# 当前流程没有合法责任任务，必须把问题转入新 Sprint，禁止临时塞入不属于该流程的任务。
+scope_conflict_routes:
+  feature-sprint:
+    story: {owner_tasks: [product]}
+    product: {owner_tasks: [product]}
+    design: {owner_tasks: [design]}
+    technical-design: {owner_tasks: [backend-design, frontend-design]}
+  maintenance:
+    story: {owner_tasks: [code]}
+    product: {transfer_to: feature-sprint}
+    design: {transfer_to: feature-sprint}
+    technical-design: {transfer_to: feature-sprint}
+  hotfix:
+    story: {owner_tasks: [code]}
+    product: {transfer_to: feature-sprint}
+    design: {transfer_to: feature-sprint}
+    technical-design: {transfer_to: feature-sprint}
+  library-sprint:
+    story: {owner_tasks: [library-design]}
+    product: {transfer_to: feature-sprint}
+    design: {transfer_to: feature-sprint}
+    technical-design: {owner_tasks: [library-design]}
+  control:
+    story: {owner_tasks: [assignment-dispatch]}
+    product: {transfer_to: feature-sprint}
+    design: {transfer_to: feature-sprint}
+    technical-design: {transfer_to: feature-sprint}
+  deploy-sprint-test:
+    story: {transfer_to: feature-sprint}
+    product: {transfer_to: feature-sprint}
+    design: {transfer_to: feature-sprint}
+    technical-design: {transfer_to: feature-sprint}
+  deploy-sprint-prod:
+    story: {transfer_to: feature-sprint}
+    product: {transfer_to: feature-sprint}
+    design: {transfer_to: feature-sprint}
+    technical-design: {transfer_to: feature-sprint}
 
 sprint_type_mode_capabilities:
   standalone: [feature-sprint, deploy-sprint-test, deploy-sprint-prod, hotfix, maintenance, library-sprint]
@@ -66,6 +154,26 @@ sprint_type_policies:
   deploy-sprint-prod: {worktree: forbidden, base: test, branch_prefix: ""}
   control: {worktree: forbidden, base: development, branch_prefix: ""}
   library-sprint: {worktree: required, base: development, branch_prefix: "library/"}
+
+# Sprint 交付策略与终态 outcome 门禁的唯一真源。terminal_tasks 中任一任务 Review 前，
+# 必须存在绑定当前 planning contract 且覆盖全部验收条件的 outcome evidence receipt。
+delivery_strategies:
+  domain-bootstrap: {observable_outcomes: [user-interaction, business-flow, external-interface, data-model, consumer-contract]}
+  vertical-slice: {observable_outcomes: [user-interaction, business-flow, external-interface, data-model]}
+  consumer-capability: {observable_outcomes: [consumer-contract, external-interface]}
+  deployment: {observable_outcomes: [deployment, operational-control]}
+  refactor: {observable_outcomes: [behavior-preservation], required_outcomes: [behavior-preservation]}
+  remediation: {observable_outcomes: [user-interaction, business-flow, external-interface, data-model, consumer-contract, deployment, operational-control, behavior-preservation]}
+  governance: {observable_outcomes: [governance-decision, operational-control]}
+
+sprint_delivery_contracts:
+  feature-sprint: {strategies: [domain-bootstrap, vertical-slice, refactor, remediation], terminal_tasks: [sprint-close], outcome_producer: boss-signoff}
+  maintenance: {strategies: [vertical-slice, refactor, remediation], terminal_tasks: [sprint-close], outcome_producer: boss-signoff}
+  library-sprint: {strategies: [domain-bootstrap, consumer-capability, refactor, remediation], terminal_tasks: [library-close], outcome_producer: task-review}
+  deploy-sprint-test: {strategies: [deployment], terminal_tasks: [integration], outcome_producer: task-review}
+  deploy-sprint-prod: {strategies: [deployment], terminal_tasks: [observe], outcome_producer: task-review}
+  hotfix: {strategies: [remediation], terminal_tasks: [observe], outcome_producer: task-review}
+  control: {strategies: [governance, deployment], terminal_tasks: [release-promote, release-rollback], outcome_producer: task-review}
 
 # ─── 任务类型规则 ───────────────────────────────────────────────
 
@@ -155,9 +263,11 @@ tasks:
     gate: L1
     allowed_modes: [control]
     tools: {allow: [kubernetes, artifact-store], deny: [floating-artifact]}
-    execute: {action: control.release.rollback, parameters: [manifest]}
+    blocking: "仅当人员在当前主交互中明确要求发布回滚后，以 release-authorization challenge → 运行时 HMAC 交互证明（15 分钟内）→ issue 签发一次性 receipt"
+    execute: {action: control.release.rollback, parameters: [manifest, authorization]}
     outputs: {path: ".harness/state/releases/"}
-    acceptance: [previous-stable-release-used, audit-recorded]
+    acceptance: [explicit-human-authorization-valid, previous-stable-release-used, audit-recorded]
+    upstream_outcome: {task: release-promote, statuses: [done, completed, 完成, blocked, failed, 失败], require_action_evidence: true}
   infra:
     label: "环境搭建"
     spec: "ARCHITECTURE.md"
@@ -189,9 +299,11 @@ tasks:
       artifacts: ["PRD 文档"]
       index: "docs/product-specs/index.md"
     acceptance:
-      - "PRD 三级自检通过"
-      - "JTBD 对照表已填"
-      - "价值闭环标注完整"
+      - "Story 场景内核、约束、非目标和 AC 已准确回读，假设未伪装成事实"
+      - "PRD 仅包含满足 AC 或明确 Architecture 风险所需的最小产品增量；每个范围项均绑定有效来源，新增/修改/删除及新增复杂度说明必要性"
+      - "PRD 的最小范围与追溯矩阵由机器校验：Scope ID 唯一，Scope Key/模块/页面与当前 Task/Run 索引逐行一致，范围动作与转译枚举合法，完整覆盖 source_stories，产品行为与验收观察具有实质内容"
+      - "PRD 影响范围与 planning contract impact_surfaces 一致；发现新增影响面时先 amend，再进入后续任务"
+      - "产品作用域索引绑定文档 SHA-256 与当前 Task/Run；Exec 登记 draft，Review PASS 后 Runtime 发布 verified、处理 Supersedes 并生成不可变 publication receipt"
 
   design:
     label: "UI 设计"
@@ -208,13 +320,14 @@ tasks:
       artifacts: ["设计文档", "HTML 原型或 PNG 设计稿"]
       index: "docs/design-docs/index.md"
     acceptance:
-      - "质量自检清单通过"
-      - "4 条设计哲学有体现"
-      - "状态完备（按 UI_DESIGN_SYSTEM.md §5 9 项清单）"
-      - "每个变更页面均有 HTML 原型或 PNG 设计稿路径"
-      - "修改既有页面含现状/目标对照 + 版式整洁度说明"
+      - "PRD/AC 与受影响页面、状态和设计证据双向追溯"
+      - "设计为满足行为结果的最小交互增量，新增页面/步骤/组件均有必要性"
+      - "UI_DESIGN_SYSTEM.md §5 状态适用性已判断；本次变化直接影响的可达状态有证据"
+      - "每个变更页面均有可对照的 HTML 原型、PNG 设计稿或未变化现状证据"
+      - "修改既有页面含现状/目标对照，项目 token 与组件 Profile 未被旁路"
       - "HTML 原型基于 templates/ui/prototype-base.html，引用 templates/ui/tokens.css"
-      - "设计文档含 Token 使用清单（UI_DESIGN_SYSTEM.md §8.3）"
+      - "设计文档含适用 Token 使用清单（UI_DESIGN_SYSTEM.md §8.3）"
+      - "设计作用域索引绑定文档 SHA-256 与当前 Task/Run；Exec 登记 draft，Review PASS 后 Runtime 发布 verified、处理 Supersedes 并生成不可变 publication receipt"
 
   backend-design:
     label: "后端技术方案"
@@ -224,15 +337,25 @@ tasks:
     tools:
       allow: [file-rw, search, explore]
       deny: [bash, modify-code]
+    facets: [data, integration, concurrency, security, observability, shared-capability]
+    default_facets: []
     prerequisites: ["product 完成"]
     outputs:
       path: "docs/tech-docs/"
       artifacts: ["后端技术方案"]
       index: "docs/tech-docs/index.md"
     acceptance:
-      - "9 章节齐全（含依赖与能力归属）"
-      - "分层正确（Controller→Service→Repository）"
-      - "接口含 ARCHITECTURE.md 指定的边界模型与错误码"
+      - "Story/AC、PRD、ARCHITECTURE.md 与技术变更双向追溯"
+      - "选择成本最低的适用建模方式并服从项目 Architecture Profile，未机械套用固定分层或 DDD"
+      - "技术方案声明 technical_design_contract_version: 1，并以二级章节完整填写来源与约束回读、现状与最小变更、建模与核心流程、契约与验证、风险/回退/未决项；Runtime 拒绝缺失、重复和空章节"
+      - "技术作用域索引绑定文档 SHA-256 与当前 Task/Run；backend draft 由 Review PASS 发布并生成不可变 publication receipt，模块与表/API/组件可检索"
+    acceptance_by_facet:
+      data: ["数据所有权、不变量、事务边界、迁移与回退影响明确"]
+      integration: ["外部契约、超时/失败语义、兼容性和验证明确"]
+      concurrency: ["并发、幂等、重试或补偿由副作用与负载证据驱动，不默认绑定中间件"]
+      security: ["新增信任边界、权限和敏感数据的主体/资源/动作/审计设计完整"]
+      observability: ["新关键链路或失败模式复用 Provider，并定义必要日志/metric/span 与关联 ID"]
+      shared-capability: ["公共技术契约与领域错误/事件/状态语义分离，Provider/消费者/版本契约明确"]
 
   frontend-design:
     label: "前端技术方案"
@@ -243,16 +366,27 @@ tasks:
     tools:
       allow: [file-rw, search, explore]
       deny: [bash, modify-code]
-    prerequisites: ["design 完成"]
+    facets: [routing, performance, analytics, security, responsive, state-machine]
+    default_facets: []
+    # 无 UI 变化的前端状态/路由方案可直接继承 product；若列入 design，阶段顺序仍强制其先完成。
+    prerequisites: ["product 完成"]
     outputs:
       path: "docs/tech-docs/"
       artifacts: ["前端技术方案"]
       index: "docs/tech-docs/index.md"
     acceptance:
-      - "7 章节齐全"
-      - "组件模式与 config/technology.yml 声明的框架一致"
-      - "性能满足约束（LCP < 2s）"
-      - "技术栈与 config/technology.yml 及 UI_DESIGN_SYSTEM.md 基线一致"
+      - "Story/AC、PRD/设计与组件、状态、契约和验证双向追溯"
+      - "技术方案声明 technical_design_contract_version: 1，并以二级章节完整填写来源与约束回读、现状与最小变更、组件与状态所有权、契约与验证、风险/回退/未决项；Runtime 拒绝缺失、重复和空章节"
+      - "状态具有单一真源和最近稳定拥有者，共享抽象具有真实消费者与稳定语义"
+      - "技术栈与 config/technology.yml 一致，只应用匹配的 UI_DESIGN_SYSTEM.md Profile"
+      - "技术作用域索引绑定文档 SHA-256 与当前 Task/Run；frontend draft 由 Review PASS 发布并生成不可变 publication receipt，模块与表/API/组件可检索"
+    acceptance_by_facet:
+      routing: ["新增/变化路由的 URL 状态、参数真源、鉴权和兼容影响明确"]
+      performance: ["性能设计包含现状/预算/触发依据和浏览器验证，不使用无来源统一阈值"]
+      analytics: ["埋点与 PRD 的行为假设或决策用途对应，不为模板完整性采集"]
+      security: ["新增输入、富文本、权限或敏感数据显示明确前后端责任和验证"]
+      responsive: ["受影响目标设备和断点来自项目 Profile，变化有设计与浏览器证据"]
+      state-machine: ["复杂状态转换包含事件、守卫、终态和恢复，简单状态未过度建模"]
 
   code:
     label: "代码生成"
@@ -272,7 +406,7 @@ tasks:
       deny: [modify-specs]
     infra_action: project.verify.preflight
     outputs:
-      path: "src/ 或 web/src/ 或 tests/e2e/scenarios/"
+      path: "src/ 或 web/src/ 或 scripts/ 或 deploy/ 或 tests/e2e/scenarios/"
       artifacts: ["可运行代码", "单元测试", "E2E 场景用例", "评审报告"]
     acceptance:
       - "覆盖率 ≥ 80%"
@@ -306,11 +440,16 @@ tasks:
     allowed_project_types: [library]
     tools: {allow: [file-rw, search, explore], deny: [modify-code]}
     prerequisites: []
-    outputs: {path: "docs/tech-docs/", artifacts: ["公共 API、兼容策略与消费者矩阵"]}
+    outputs:
+      path: "docs/tech-docs/"
+      artifacts: ["公共 API、兼容策略与消费者矩阵"]
+      index: "docs/tech-docs/index.md"
     acceptance:
       - "能力 ID、公共/业务边界、版本兼容与废弃策略明确"
       - "受影响消费者及其契约命令完整登记"
-      - "不包含任一消费者的业务语义"
+      - "公共技术 envelope 与业务错误码、领域事件、状态值和 Repository 所有权分离"
+      - "每个新增公开符号有真实消费者和契约验证，无推测性 API"
+      - "技术作用域索引绑定文档 SHA-256 与当前 Task/Run；library draft 由 Review PASS 发布并生成不可变 publication receipt，模块与 API/组件可检索"
 
   library-code:
     label: "公共包实现"
@@ -445,7 +584,7 @@ tasks:
       - "entry_action 退出码 = 0（总分 ≥ 95）"
       - "7 个评分维度全部执行；不适用维度按当前 project.type 规则处理"
       - "报告文件为 <N-name>-quality.md（非时间戳命名；<N-name> 已含 sprint- 前缀）"
-      - "Performance baseline 达标"
+      - "Architecture/PRD 对本次声明性能目标时，项目 producer 证据达标；未声明时该维度明确不适用"
     acceptance_by_project_type:
       backend: ["API 单元/集成、服务健康和项目登记的覆盖率证据完整"]
       fullstack: ["Playwright E2E 与 UI 还原度三项门禁通过", "截图和真实链路证据（若存在）已记录"]
@@ -491,11 +630,13 @@ tasks:
     label: "产品走查"
     spec: "PRODUCT_ACCEPTANCE.md"
     gate: L3  # 必须审批 — BOSS 产品走查
+    approval_artifact: "docs/acceptance-reports/<N-name>-boss-signoff.yml"
+    approval_phase: review
     tools:
       allow: [file-rw, search, bash, chrome-devtools, webapp-testing]
       deny: [modify-code, modify-specs]
     # H-OPT v1.6: PR 后置后，product-acceptance 紧接 quality
-    prerequisites: ["quality 通过（阈值由 config/harness.yml gates.quality_threshold 决定，默认 95）", "PRD + 设计文档存在"]
+    prerequisites: ["quality 通过（阈值由 config/harness.yml gates.quality_threshold 决定，默认 95）", "PRD + Sprint 实际列入的适用设计文档存在"]
     infra_action: project.verify.preflight
     outputs:
       path: "docs/acceptance-reports/"
@@ -507,14 +648,13 @@ tasks:
         markers:
           - "结果: ✅ 达标"
     acceptance:
-      - "产品主张目标 ≥ 4/5"
-      - "走查指南已生成（<N-name>-walkthrough.md），含环境信息 + 设计对照 + 逐步操作 + 预期结果 + 截图占位"
+      - "产品决策质量目标 ≥ 4/5，Story/AC 与实际观察可追溯"
+      - "走查指南已生成（<N-name>-walkthrough.md），含环境信息 + 变更对照 + 逐步操作 + 预期结果 + 证据占位"
       - "走查报告已生成（<N-name>-acceptance.md），用于记录 Boss 实际结果与结论"
-      - "Boss signoff 已生成（<N-name>-boss-signoff.yml），decision=approved 且 commit_sha 指向当前交付提交"
     acceptance_by_project_type:
       backend: ["API 主路径、异常路径、权限和持久化验收完整"]
-      fullstack: ["4 维 UI 走查完整", "prototype-vs-live 截图、版式和跨页持久化检查完整"]
-      frontend: ["4 维 UI 走查完整", "prototype-vs-live 截图与版式检查完整"]
+      fullstack: ["本 Sprint 有 UI 变化时执行适用 UI 走查和 prototype-vs-live 对照；无 UI 变化时记录 PRD 影响面依据", "用户/消费者主路径与适用持久化检查完整"]
+      frontend: ["适用的四维走查完整，不可达或未触发检查项有范围依据", "prototype-vs-live 截图与版式检查覆盖本次变化"]
     blocking: "product-acceptance Review PASS 后 → 编排者使用 ask_user 阻塞等待 Boss 确认，并执行 harness acceptance-record approve|reject <N-name> 固化结果"
 
   sprint-close:
@@ -536,10 +676,11 @@ tasks:
     steps:
       - "归档计划：docs/exec-plans/active/ → docs/exec-plans/completed/"
       - "更新 AGENTS.md 当前迭代指针"
-      - "更新 USER_STORIES.md 已交付 Story 状态"
+      - "执行 harness requirements complete <N-name>，仅将本 Sprint 引用且不再被其他 active Sprint 使用的 Story 从 ready 更新为 done"
     acceptance:
       - "计划文件在 exec-plans/completed/"
       - "AGENTS.md 迭代指针已更新"
+      - "requirements complete 成功并生成 Story 完成回执；non-product-change 返回 not-applicable"
       - "归档与 Story 状态变更已纳入当前 sprint 分支，等待 pr 任务合并；不得先销毁 worktree"
 
   # H-OPT v1.6: release 任务删除（被 deploy-sprint 概念替代，发布作为独立 Sprint 编排）
@@ -552,14 +693,14 @@ tasks:
     tools:
       allow: [file-rw, search, bash, sub-agent]
       deny: [modify-code, modify-specs]
-    prerequisites: ["prod-deploy 完成", "监控就绪"]
+    prerequisites: ["prod-deploy 完成"]
     outputs:
       path: "docs/observability-reports/"
       artifacts: ["观测报告"]
       index: "docs/observability-reports/index.md"
     acceptance:
-      - "5 维全部达标"
-      - "P99 < 8s"
+      - "适用性矩阵中的维度全部达标；不适用项说明理由"
+      - "ARCHITECTURE.md 与本次技术方案声明的适用 SLO 全部达标"
       - "无 Critical 告警"
 
   # ─── CICD.md：CI/CD 任务类型 ────────────────────────────────
@@ -567,6 +708,7 @@ tasks:
   promote-prep:
     label: "部署前置检查（test|prod）"
     spec: "CICD.md / config/deploy.yml"
+    lifecycle: legacy-only
     gate: L1
     execution_protocol: orchestrator
     review_protocol: artifact-only
@@ -575,7 +717,10 @@ tasks:
       deny: [modify-specs, modify-code]
     prerequisites:
       - "config/deploy.yml 存在（或旧 environments.yml 可被 deploy-config loader 兼容读取）"
-    external_evidence: {kind: sprint-signoffs, field: source_sprints}
+    external_evidence:
+      kind: sprint-signoffs
+      field: source_sprints
+      sprint_types: [deploy-sprint-test, deploy-sprint-prod]
     steps:
       - "harness promote-prep <env>"
     acceptance:
@@ -593,11 +738,18 @@ tasks:
       allow: [file-rw, search, bash]
       deny: [modify-specs, modify-code]
     prerequisites:
-      - "promote-prep 通过（.harness/state/promote-prep-*.json ready=true）"
+      - "来源 commit 已固定；构建过程不读取目标环境 Secrets"
+    external_evidence:
+      kind: sprint-signoffs
+      field: source_sprints
+      sprint_types: [deploy-sprint-test]
+      candidate_field: base_sha
+      require_head_match: true
+      require_source_ancestry: true
     steps:
       - "harness build-image --sprint <N-name> [--target <name>|all]"
     acceptance:
-      - ".harness/images/sprint-<N-name-without-prefix>-<sha>* 产物存在"
+      - ".harness/images/*-<source-commit>.tar 产物存在，或 registry image digest 已登记"
       - ".harness/state/build-image-<N-name>.json success=true"
 
   promote-test:
@@ -610,31 +762,59 @@ tasks:
       allow: [file-rw, search, bash]
       deny: [modify-specs, modify-code]
     prerequisites:
-      - "promote-prep test 通过"
       - "build-image 完成"
-    infra_action: environment.test.check
+    infra_action: environment.test.prepare
+    infra_cache: never
+    artifact_action: project.promote-test.guard
     steps:
-      - "harness promote test [--sprints id-list] [--train]"
+      - "harness deploy --env test --tag <commit-sha> --sprint <N-name> --task-id <task-id> --artifact <name=path> --artifact-sha256 <name=sha256:digest>"
+      - "harness promote-test-receipt --sprint <N-name> --task-id <task-id>"
     acceptance:
-      - "promote/* PR 已创建"
-      - "L2 quality + integration 通过"
+      - ".harness/state/deploy-test-*.json 写入 success=true、readiness=passed、smoke=passed"
+      - "部署 adapter 证据绑定不可变 commit、全部 artifact SHA-256 与目标 image digest"
       - "test 环境 deploy 健康检查通过"
-      - ".harness/state/promotion-log.yml 已写入记录"
+      - ".harness/state/promote-test/<sprint>/<task-id>/<run-id>.json 绑定当前 attempt、build state、制品摘要和 deploy state"
+      - "integration 作为后续独立任务执行，不得成为 promote-test 的循环前置"
 
   integration:
-    label: "集成测试（L2）"
-    spec: "CICD.md 三层测试矩阵"
+    label: "真实环境集成处理与验证"
+    spec: "CICD.md / MIGRATION.md"
     gate: L1
+    execution_protocol: agent
+    review_protocol: agent-full
+    execution_contract: integration-v1
+    entry_action: project.integration.execute
+    facets: [data, schema, environment, external, verification, performance, observability]
+    default_facets: [verification]
     tools:
-      allow: [file-rw, search, bash, webapp-testing]
-      deny: [modify-specs]
-    prerequisites: ["promote-test 已创建 PR"]
+      allow: [file-rw, search, webapp-testing]
+      deny: [modify-specs, modify-code, build-image, replace-delivery-artifact]
+    prerequisites: ["promote-test deploy 成功"]
     infra_action: environment.test.check
+    artifact_action: project.integration.guard
     outputs:
       path: "docs/test-reports/integration/"
+      artifacts: ["<task-id>/receipt.yml 结构化执行回执", "<task-id>/ 操作前后证据", "checkpoint 或只读验证结果"]
     acceptance:
-      - "跨服务集成用例通过"
-      - "migration dry-run 通过：harness migration-check all <release-dir>"
+      - {id: integration.delivery-identity-bound, text: "处理前后 commit、镜像及制品 digest 保持为 promote-test 已登记的不可变交付身份"}
+      - {id: integration.operation-audit-complete, text: "报告记录目标环境、选择的 facets、执行操作、作用范围、前后状态、失败与最终结果"}
+      - {id: integration.final-health-passed, text: "完成处理后目标环境健康且所声明的最终验收结果全部通过"}
+      - {id: integration.receipt-verified, text: "Review Gate 已验证结构化回执、producer、恢复策略、证据摘要及受保护工作区未变化"}
+    acceptance_by_facet:
+      data:
+        - {id: integration.data-controlled, text: "数据清洗、修正或回填仅通过已评审 producer 执行，并记录作用范围、前后校验及 checkpoint"}
+      schema:
+        - {id: integration.schema-controlled, text: "DDL 仅执行已评审 migration producer，Schema 差异、幂等或续跑结果及 validator 证据完整"}
+      environment:
+        - {id: integration.environment-controlled, text: "环境修正仅通过已登记 adapter、命令或 runbook 执行，配置和运行状态变化可审计"}
+      external:
+        - {id: integration.external-verified, text: "真实外部系统连接、失败语义和业务结果完成验证"}
+      verification:
+        - {id: integration.verification-passed, text: "对部署后系统执行所声明的只读 API、页面、跨服务或 E2E 验证并通过"}
+      performance:
+        - {id: integration.performance-passed, text: "按计划声明的样本、窗口和阈值记录真实性能结果并通过"}
+      observability:
+        - {id: integration.observability-passed, text: "观察窗内无计划禁止的崩溃、重启、错误或 Critical 告警"}
 
   release-prep:
     label: "Release 资产准备"
@@ -674,6 +854,7 @@ tasks:
       path: "deploy/release/<vX.Y.Z>/migrations/"
       artifacts: ["NNN-slug.up.sql", "NNN-slug.down.sql", "manifest.yml"]
     acceptance:
+      - "harness migration-check policy <dir> 通过"
       - "harness migration-check pair <dir> 通过"
       - "harness migration-check name <dir> 通过"
       - "harness migration-check dry-down <dir> 通过"
@@ -725,12 +906,15 @@ tasks:
     prerequisites: ["release-approval 通过", "main 已合并"]
     infra_action: environment.prod.check
     steps:
+      - "harness migration-progress begin <release-id> --candidate-ref <candidate-data-ref>；每批提交 checkpoint"
+      - "迁移、质量检查、服务启动与发布命令分别通过 harness migration-progress run <release-id> --phase <phase> -- <argv> 执行"
       - "harness deploy preflight-secrets --env prod"
       - "harness image-promote --from test-<sha> --to prod-<sha>"
-      - "harness deploy --env prod --tag prod-<sha>"
-      - "harness deploy watch --env prod --window 30m"
+      - "harness deploy --env prod --tag prod-<sha> --progress-id <release-id>"
+      - "harness deploy watch --env prod --window 30m --progress-id <release-id>"
       - "harness back-merge --from main --to test,develop --reason release"
     acceptance:
+      - "生产 deploy/promote 必须绑定 active progress state；迁移、质量检查、服务启动或发布失败时记录 fail，修复后显式 resume"
       - "健康窗口（30 min）通过"
       - "back-merge PR 已创建"
       - "无回滚"
@@ -813,13 +997,9 @@ spawn_rules:
   - from: test-integration
     to: [release-promote, integration-finding]
     condition: "系统验证通过→提升；失败→固化 Finding"
-  - from: release-promote
-    to: [release-rollback]
-    condition: "提升后健康检查失败，且存在已记录稳定 Release"
-
   - from: product
     to: [design, backend-design, frontend-design]
-    condition: "按 project.type 派生适用设计；fullstack 固定执行 UI、后端和前端方案"
+    condition: "按 Story/PRD 真实影响面选择：UI 行为→design+frontend-design，后端/数据/集成→backend-design；fullstack 不代表三者全部必选"
   - from: design
     to: [frontend-design]
     condition: "design 完成"
@@ -833,18 +1013,21 @@ spawn_rules:
     to: [quality]
     condition: "harness.yml.walkthrough_env=development：测试用例生成完成后直接 quality"
   - from: test-case-gen
-    to: [promote-prep]
-    condition: "harness.yml.walkthrough_env=test：先部署 Test 环境，再执行 quality / product-acceptance"
+    to: [build-image]
+    condition: "harness.yml.walkthrough_env=test：先构建不可变镜像，再部署 Test 环境"
   - from: promote-test
+    to: [integration]
+    condition: "harness.yml.walkthrough_env=test：Test 部署健康后进行真实环境集成处理与验证"
+  - from: integration
     to: [quality]
-    condition: "harness.yml.walkthrough_env=test：Test 环境健康后执行 quality"
+    condition: "harness.yml.walkthrough_env=test：环境集成完成后执行 quality"
   - from: quality
     to: [product-acceptance]
     condition: "达标（≥ 阈值，由 harness.yml.gates.quality_threshold 决定）→ product-acceptance"
     # 不达标：回退对应 code 任务状态为 in-progress，重新执行（见 SPRINT.md 质量回退协议）
   - from: product-acceptance
-    to: [code, sprint-close]
-    condition: "偏差→code 修复；通过→先归档 Sprint 元数据"
+    to: [product, code, sprint-close]
+    condition: "需求变化/新 Story→回退 product 及下游并 amend；实现缺陷/非产品问题→code；通过→先归档 Sprint 元数据"
   - from: sprint-close
     to: [pr]
     condition: "归档计划和项目指针已纳入 sprint 分支"
@@ -854,20 +1037,17 @@ spawn_rules:
 
   # ─── deploy-sprint 流转（H-OPT v1.6：发布作为独立 Sprint，无 worktree）─────
   # 触发：feature-sprint pr 完成合并与安全清理 + 项目要求 promote 到 test/prod。
-  # deploy-sprint 任务集（test）：promote-prep → build-image → promote-test → integration
+  # deploy-sprint 任务集（test）：build-image → promote-test（自动 Preflight）→ integration
   # deploy-sprint 任务集（prod）：上述 + release-prep → migration-design+regression → release-approval(L3) → prod-deploy → back-merge → observe
   - from: pr
-    to: [promote-prep]
-    condition: "显式启动独立 deploy-sprint（test 或 prod）；不创建 worktree"
-  - from: promote-prep
     to: [build-image]
-    condition: ".harness/state/promote-prep-<env>.json ready=true"
+    condition: "显式启动独立 deploy-sprint-test；不创建 worktree"
   - from: build-image
     to: [promote-test]
     condition: ".harness/state/build-image-<N-name>.json success=true（test 链路）"
   - from: promote-test
     to: [integration]
-    condition: "promote/* PR 创建后"
+    condition: "Test deploy 状态 success=true、readiness=passed、smoke=passed 后"
   - from: integration
     to: [release-prep]
     condition: "若 deploy-sprint 目标=prod，则进入 release 链路；否则 deploy-sprint 结束"

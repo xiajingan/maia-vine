@@ -20,6 +20,14 @@ from mai_harness.runtime.application.control import (
     transition_release,
     validate_registered_relationships,
 )
+from mai_harness.runtime.application.migration_progress import (
+    begin,
+    commit_checkpoint,
+    complete,
+    load_progress,
+    record_failure,
+)
+from mai_harness.runtime.application.release_authorization import consume_release_rollback_authorization
 from mai_harness.runtime.commands.kubernetes import deploy_release
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.core.paths import PATHS
@@ -59,9 +67,11 @@ def main() -> int:
     transition.add_argument("manifest", type=Path)
     transition.add_argument("status", choices=("test-verifying", "failed"))
     transition.add_argument("--evidence", action="append", default=[])
-    for name in ("release-promote", "release-rollback"):
-        operation = sub.add_parser(name)
-        operation.add_argument("manifest", type=Path)
+    promote = sub.add_parser("release-promote")
+    promote.add_argument("manifest", type=Path)
+    rollback = sub.add_parser("release-rollback")
+    rollback.add_argument("manifest", type=Path)
+    rollback.add_argument("--authorization", type=Path, required=True)
     finding = sub.add_parser("integration-finding")
     finding.add_argument("manifest", type=Path)
     finding.add_argument("--summary", required=True)
@@ -164,6 +174,20 @@ def main() -> int:
         print(json.dumps({"manifest": str(target)}, ensure_ascii=False))
     elif args.command in {"release-promote", "release-rollback"}:
         current_release = load_manifest(args.manifest)
+        progress_id = f"control.{current_release.get('release_id', '')}"
+        if args.command == "release-rollback":
+            try:
+                authorization = consume_release_rollback_authorization(
+                    args.authorization,
+                    str(current_release.get("release_id", "")),
+                    str(current_release.get("manifest_digest", "")),
+                    PATHS.state,
+                    f"control.{current_release.get('release_id', '')}",
+                )
+            except ValueError as exc:
+                parser.error(str(exc))
+        else:
+            authorization = None
         verification_commands = harness.get("control", {}).get("production_verification_commands", [])
         if args.command == "release-promote" and not verification_commands:
             parser.error("Production 提升必须配置 control.production_verification_commands")
@@ -175,6 +199,12 @@ def main() -> int:
                 "manifest_digest"
             ):
                 parser.error("Release 已提升且没有可恢复的同轮操作日志")
+            progress = load_progress(PATHS.project, progress_id)
+            if progress.get("status") == "active":
+                commit_checkpoint(PATHS.project, progress_id, "production-verified", "Production verification passed")
+                complete(PATHS.project, progress_id)
+            elif progress.get("status") != "completed":
+                parser.error("Release 已提升但 Production progress 不可协调")
             promote_stable_release(PATHS.state, args.manifest, current_release)
             operation_store.write_json(operation_name, {**operation, "status": "complete"})
             print(
@@ -203,6 +233,18 @@ def main() -> int:
         expected = "test-verified" if args.command == "release-promote" else "promoted"
         if deployed_release.get("status") != expected:
             parser.error(f"待部署 Release 必须为 {expected}")
+        if args.command == "release-promote":
+            progress = begin(
+                PATHS.project,
+                progress_id,
+                str(current_release.get("manifest_digest", "")),
+                workflow_kind="control-release",
+                required_checkpoints=["production-verified"],
+            )
+            if progress.get("status") == "failed":
+                parser.error("Production checkpoint 状态为 failed；修复后先执行 migration-progress resume")
+            if progress.get("status") == "completed" and operation.get("status") != "deployed":
+                parser.error("Production checkpoint 已完成但 Release 操作未处于可协调状态")
         if operation.get("status") == "deployed" and operation.get("manifest_digest") == current_release.get(
             "manifest_digest"
         ):
@@ -210,6 +252,11 @@ def main() -> int:
             target_status = "promoted" if args.command == "release-promote" else "rolled-back"
             result = transition_release(args.manifest, target_status, evidence=[evidence])
             if args.command == "release-promote":
+                if load_progress(PATHS.project, progress_id).get("status") == "active":
+                    commit_checkpoint(
+                        PATHS.project, progress_id, "production-verified", "Production verification passed"
+                    )
+                    complete(PATHS.project, progress_id)
                 promote_stable_release(PATHS.state, args.manifest, result)
             else:
                 complete_rollback(PATHS.state, args.manifest)
@@ -218,100 +265,70 @@ def main() -> int:
                 json.dumps({"manifest": str(args.manifest), "release": result, "reconciled": True}, ensure_ascii=False)
             )
             return 0
-        operation_store.write_json(
-            operation_name,
-            {
-                "operation": args.command,
-                "manifest": str(args.manifest.resolve()),
-                "manifest_digest": current_release["manifest_digest"],
-                "status": "deploying",
-            },
+        resume_verification = (
+            args.command == "release-promote"
+            and operation.get("status") == "verification-failed"
+            and operation.get("manifest_digest") == current_release.get("manifest_digest")
+            and operation.get("evidence")
         )
-        stable_before = StateStore(PATHS.state / "releases").read_json("stable.json", {})
-        baseline_path_value = (stable_before.get("current") or {}).get("manifest")
-        baseline_path = Path(baseline_path_value) if baseline_path_value else None
-        try:
-            output = deploy_release(
-                deploy_manifest,
-                "prod",
-                execute=True,
-                production_authorized=True,
-                baseline_manifest=baseline_path,
-            )
-        except Exception as exc:
-            rollback_evidence = None
-            rollback_error = None
-            if baseline_path and baseline_path.resolve() != deploy_manifest.resolve():
-                try:
-                    rollback = deploy_release(
-                        baseline_path,
-                        "prod",
-                        execute=True,
-                        production_authorized=True,
-                        baseline_manifest=deploy_manifest,
-                    )
-                    rollback_evidence = rollback.get("evidence")
-                except Exception as recovery_exc:
-                    rollback_error = str(recovery_exc)
+        if resume_verification:
+            evidence = operation["evidence"]
+        else:
             operation_store.write_json(
                 operation_name,
                 {
-                    **operation_store.read_json(operation_name),
-                    "status": "deployment-failed",
-                    "error": str(exc),
-                    "rollback_evidence": rollback_evidence,
-                    "rollback_error": rollback_error,
+                    "operation": args.command,
+                    "manifest": str(args.manifest.resolve()),
+                    "manifest_digest": current_release["manifest_digest"],
+                    "status": "deploying",
+                    **({"authorization": authorization} if authorization else {}),
                 },
             )
-            raise RuntimeError(f"Production 部署失败: {exc}; 恢复结果: {rollback_error or rollback_evidence}") from exc
-        evidence = output.get("evidence")
+            stable_before = StateStore(PATHS.state / "releases").read_json("stable.json", {})
+            baseline_path_value = (stable_before.get("current") or {}).get("manifest")
+            baseline_path = Path(baseline_path_value) if baseline_path_value else None
+            try:
+                output = deploy_release(
+                    deploy_manifest,
+                    "prod",
+                    execute=True,
+                    production_authorized=True,
+                    baseline_manifest=baseline_path,
+                )
+            except Exception as exc:
+                if (
+                    args.command == "release-promote"
+                    and load_progress(PATHS.project, progress_id).get("status") == "active"
+                ):
+                    record_failure(PATHS.project, progress_id, "release", str(exc)[:1000])
+                operation_store.write_json(
+                    operation_name,
+                    {
+                        **operation_store.read_json(operation_name),
+                        "status": "deployment-failed",
+                        "error": str(exc),
+                    },
+                )
+                raise RuntimeError(f"Production 部署失败，候选版本保持原状，修复后继续: {exc}") from exc
+            evidence = output.get("evidence")
         if not evidence:
             parser.error("部署未返回证据")
         if args.command == "release-promote":
             for index, command in enumerate(verification_commands, start=1):
                 result = execute(CommandSpec.argv_command(command, cwd=PATHS.project))
                 if not result.ok:
-                    stable = StateStore(PATHS.state / "releases").read_json("stable.json", {})
-                    previous_manifest = (stable.get("current") or {}).get("manifest")
-                    rollback_evidence = None
-                    rollback_error = None
-                    recovery_checks = []
-                    if previous_manifest:
-                        try:
-                            rollback = deploy_release(
-                                Path(previous_manifest),
-                                "prod",
-                                execute=True,
-                                production_authorized=True,
-                                baseline_manifest=deploy_manifest,
-                            )
-                            rollback_evidence = rollback.get("evidence")
-                            for verify_command in verification_commands:
-                                restored = execute(CommandSpec.argv_command(verify_command, cwd=PATHS.project))
-                                recovery_checks.append(
-                                    {
-                                        "argv": verify_command,
-                                        "returncode": restored.returncode,
-                                        "stdout": restored.stdout[-2000:],
-                                        "stderr": restored.stderr[-2000:],
-                                    }
-                                )
-                                if not restored.ok:
-                                    rollback_error = "上一稳定版本健康检查失败"
-                                    break
-                        except Exception as recovery_exc:
-                            rollback_error = str(recovery_exc)
+                    if load_progress(PATHS.project, progress_id).get("status") == "active":
+                        record_failure(
+                            PATHS.project,
+                            progress_id,
+                            "service-start",
+                            f"production verification command {index} failed",
+                        )
                     operation_store.write_json(
                         operation_name,
                         {
                             **operation_store.read_json(operation_name),
-                            "status": (
-                                "recovery-required"
-                                if not previous_manifest
-                                else "recovery-failed"
-                                if rollback_error
-                                else "recovered-after-verification-failure"
-                            ),
+                            "status": "verification-failed",
                             "failed_command": index,
                             "evidence": evidence,
                             "verification": {
@@ -320,16 +337,12 @@ def main() -> int:
                                 "stdout": result.stdout[-2000:],
                                 "stderr": result.stderr[-2000:],
                             },
-                            "rollback_evidence": rollback_evidence,
-                            "rollback_error": rollback_error,
-                            "recovery_verification": recovery_checks,
                         },
                     )
-                    if not previous_manifest:
-                        parser.error(f"Production verification command {index} failed；不存在上一稳定版本，需人工恢复")
-                    if rollback_error:
-                        parser.error(f"Production verification command {index} failed；回退失败: {rollback_error}")
-                    parser.error(f"Production verification command {index} failed；已回退上一稳定版本")
+                    parser.error(
+                        f"Production verification command {index} failed；候选版本已保留，修复后继续；"
+                        "仅人员明确要求时执行 release-rollback"
+                    )
         operation_store.write_json(
             operation_name,
             {**operation_store.read_json(operation_name), "status": "deployed", "evidence": evidence},
@@ -337,6 +350,9 @@ def main() -> int:
         target_status = "promoted" if args.command == "release-promote" else "rolled-back"
         result = transition_release(args.manifest, target_status, evidence=[evidence])
         if args.command == "release-promote":
+            if load_progress(PATHS.project, progress_id).get("status") == "active":
+                commit_checkpoint(PATHS.project, progress_id, "production-verified", "Production verification passed")
+                complete(PATHS.project, progress_id)
             promote_stable_release(PATHS.state, args.manifest, result)
         else:
             complete_rollback(PATHS.state, args.manifest)

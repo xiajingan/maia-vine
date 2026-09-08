@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Validate and materialize deployment inputs before build or promotion."""
+"""Validate and materialize deployment inputs immediately before promotion."""
 
 import argparse
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mai_harness.runtime.application.promotion_preflight import (
+    promotion_input_identity,
+    promotion_preflight_filename,
+)
 from mai_harness.runtime.application.required_secrets import analyze_required_secrets
+from mai_harness.runtime.application.task_evidence import current_attempt_state_path
 from mai_harness.runtime.commands.env_check import collect_validation_issues
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.deploy_config import (
@@ -68,8 +74,40 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("env", choices=("test", "prod"))
     parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--sprint")
+    parser.add_argument("--task-id")
+    parser.add_argument("--run-id")
     args = parser.parse_args()
     root = Path.cwd()
+    binding_values = (args.sprint, args.task_id, args.run_id)
+    if any(binding_values) and not all(binding_values):
+        parser.error("--sprint、--task-id 与 --run-id 必须同时提供")
+    task_binding = None
+    if all(binding_values):
+        sprint = root / "docs/exec-plans/active" / f"{Path(args.sprint).name}.md"
+        if not sprint.is_file() or args.sprint != sprint.stem:
+            parser.error(f"当前 active Sprint 计划不存在: {args.sprint}")
+        attempt_path = current_attempt_state_path(root, sprint, args.task_id)
+        try:
+            attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            parser.error(f"promote-test attempt 无法读取: {attempt_path}: {exc}")
+        if (
+            attempt.get("schema_version") != 3
+            or attempt.get("sprint") != sprint.stem
+            or attempt.get("task_id") != args.task_id
+            or attempt.get("task_type") != "promote-test"
+            or attempt.get("status") != "pending"
+            or attempt.get("run_id") != args.run_id
+            or attempt.get("review") is not None
+        ):
+            parser.error("promote-prep 必须绑定当前 pending promote-test attempt")
+        task_binding = {
+            "sprint": sprint.stem,
+            "task_id": args.task_id,
+            "attempt_run_id": attempt["run_id"],
+            "attempt": attempt["attempt"],
+        }
     issues = []
     try:
         deploy, harness, entry = load_deploy_config(), load_harness_config(), get_environment(args.env)
@@ -107,8 +145,12 @@ def main() -> int:
         issues.append({"kind": "secret-file", "detail": f"已生成 {secret_file['path']}，请填写后重跑"})
     if snapshot["error"]:
         issues.append({"kind": "secret-file", "detail": snapshot["error"]})
-    environment = {**os.environ, **load_local_runtime_env_snapshot(root)["values"], **snapshot["values"]}
-    validation = collect_validation_issues(deploy, environment, environment=args.env)
+    deployment_values = {**os.environ, **snapshot["values"]}
+    validation_values = {
+        **deployment_values,
+        **load_local_runtime_env_snapshot(root)["values"],
+    }
+    validation = collect_validation_issues(deploy, validation_values, environment=args.env)
     issues += [{"kind": "schema", "detail": item} for item in validation.schema_errors] + [
         {"kind": "secret", "detail": item} for item in validation.secret_errors
     ]
@@ -118,7 +160,17 @@ def main() -> int:
     except ValueError as exc:
         mode, deployment_asset = "unknown", Path(entry.get("compose_file", ""))
         issues.append({"kind": "deploy-mode", "detail": str(exc)})
+    input_identity, identity_errors = promotion_input_identity(
+        root,
+        args.env,
+        deploy,
+        harness,
+        entry,
+        deployment_values,
+    )
+    issues += [{"kind": "deployment-identity", "detail": item} for item in identity_errors]
     state = {
+        "schema_version": 1,
         "env": args.env,
         "enabled": bool(entry.get("enabled")),
         "deploy_mode": mode,
@@ -126,11 +178,16 @@ def main() -> int:
         "required_secrets": analyzed["secrets"],
         "secrets_file": secret_file["path"],
         "health_url": entry.get("health_url"),
+        "task_binding": task_binding,
+        "input_identity": input_identity,
         "issues": issues,
         "ready": not issues,
         "ts": datetime.now(UTC).isoformat(),
     }
-    target = StateStore(root / ".harness/state").write_json(f"promote-prep-{args.env}.json", state)
+    store = StateStore(root / ".harness/state")
+    target = store.write_json(f"promote-prep-{args.env}.json", state)
+    if task_binding:
+        target = store.write_json(promotion_preflight_filename(args.env, task_binding), state)
     for issue in issues:
         print(f"❌ [{issue['kind']}] {issue['detail']}")
     print(f"{'✅' if not issues else '❌'} promote-prep {args.env}: {target}")

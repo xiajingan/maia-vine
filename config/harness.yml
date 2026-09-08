@@ -61,3 +61,15 @@ management:
   assignment_inbox: docs/assignments/inbox
   assignment_responses: docs/assignments/responses
   deliveries_dir: docs/deliveries
+planning:
+  minimum_bootstrap_domains: 3
+  bootstrap_completion_receipt: docs/architecture/bootstrap-completion.yml
+  project_stage: greenfield
+architecture:
+  profile: simple-layered
+observability:
+  required_assets:
+  - dashboards
+  - alerts
+  - queries
+  - runbooks

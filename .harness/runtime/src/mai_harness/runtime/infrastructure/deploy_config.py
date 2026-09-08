@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,30 @@ DEPLOY_PATH = Path(os.environ.get("DEPLOY_CONFIG_PATH", str(PATHS.project_config
 LEGACY_ENV_PATH = Path("config/environments.yml")
 LEGACY_BUILD_PATH = Path("config/build-targets.yml")
 _cache: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class DeployAdapter:
+    """Validated project-owned deploy adapter declaration."""
+
+    argv: tuple[str, ...]
+    actions: frozenset[str]
+
+
+def get_deploy_adapter(entry: dict[str, Any]) -> DeployAdapter | None:
+    """Return the optional adapter through one typed config boundary."""
+    raw = entry.get("adapter")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("deploy adapter 必须是 mapping")
+    argv = raw.get("argv")
+    actions = raw.get("actions", ["deploy", "preflight", "watch", "rollback"])
+    if not isinstance(argv, list) or not argv or not all(isinstance(item, str) and item for item in argv):
+        raise ValueError("deploy adapter.argv 必须是非空字符串列表")
+    if not isinstance(actions, list) or not actions or not all(isinstance(item, str) for item in actions):
+        raise ValueError("deploy adapter.actions 必须是非空字符串列表")
+    return DeployAdapter(tuple(argv), frozenset(actions))
 
 
 def merge_legacy_config(env_config: dict[str, Any], build_config: dict[str, Any] | None) -> dict[str, Any]:

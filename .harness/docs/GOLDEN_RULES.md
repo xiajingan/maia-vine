@@ -7,12 +7,12 @@
 
 | # | 原则 | 检查方式 | Lint 规则 |
 |---|------|---------|----------|
-| G-1 | **优先共享工具库**：禁止在模块内手写重复 helper，提取到 `shared/` | Lint（pre-commit + CI） | `harness/no-duplicate-helper` |
+| G-1 | **复用先于复制，所有权先于共享**：先复用已有能力；只有稳定共同语义和真实消费者才提取共享抽象，业务语义留在拥有它的领域 | Lint 提示 + Code Review | `harness/no-duplicate-helper` |
 | G-2 | **禁止 YOLO 探测数据**：所有外部输入必须边界校验或 SDK 强类型访问 | Lint（pre-commit + CI） | `no-explicit-any`（项目启用） |
 | G-3 | **不变式集中管理**：魔法数字、业务常量、配置阈值集中到 `config/` 或 `shared/constants` | Lint（pre-commit + CI） | `harness/no-magic-values` |
 | G-4 | **禁止 GPL 依赖**：不得引入 GPL/AGPL 依赖；Python 与 TypeScript 分别执行项目配置的许可证/漏洞审计 | 项目审计命令 / CI | — |
 | G-5 | **E2E 场景覆盖关键链路**：fullstack/frontend 的用户可见链路须有 `tests/e2e/scenarios/` Playwright 用例；backend 使用 API 集成测试 | 当前 project.type 测试命令 + CI code-garden | — |
-| G-6 | **写操作必须幂等**：POST/PUT/PATCH 端点须支持 `Idempotency-Key` 或业务天然幂等（如 upsert），防止网络重试导致重复数据 | Code Review | — |
+| G-6 | **副作用与重试语义必须明确**：存在网络重试、并发写或不可重复副作用时，按业务语义选择天然幂等、Idempotency Key、去重、锁、版本检查、补偿或明确拒绝重试；无风险证据时不默认引入 Redis 幂等层 | Code Review | — |
 | G-7 | **外部链路保留真实证据**：涉及第三方能力、媒体持久化、支付、消息发送、AI 推理等用户可见外部链路时，测试用例至少 1 条声明 `execution.mode: live`，质量报告须记录真实链路结果。执行 live 用例时，缺失的真实 KEY / 账号通过 `ask_user` 向用户补充；仅当用例 `execution.mock_reason` 字段明确声明不可测原因（如第三方服务受可信域名 / 可信 IP 限制无法在本地 Docker 测试）时，允许使用 Mock 替代 | `quality_score.py` + 产品走查 | — |
 | G-8 | **本地 Docker 统一运行**：本地联调、API/E2E/UI 还原度/产品走查统一基于 `docker compose` 容器（中间件 + API + Web + Mock），客户端程序在宿主机运行；细则见 [G-8 代码化要点](#g-8-代码化要点) | `verify.py` + `sprint_gate.py` | — |
 

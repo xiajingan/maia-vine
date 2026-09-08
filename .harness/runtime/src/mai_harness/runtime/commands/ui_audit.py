@@ -16,9 +16,84 @@ from mai_harness.runtime.infrastructure.ui_contracts import load_contracts, vali
 
 DEFAULT_VIEWPORT = {"width": 1280, "height": 720}
 
+# Calibrated to the observed 255/255/255 versus 249/250/251 false negative.
+BACKGROUND_RGB_CHANNEL_TOLERANCE = 6
+RGB_COLOR_PATTERN = re.compile(r"^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$")
+
+EFFECTIVE_BACKGROUND_EVALUATOR = r"""
+(node) => {
+  const parseColor = (value) => {
+    const legacy = value.match(
+      /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/
+    );
+    if (legacy) {
+      return [
+        Number(legacy[1]),
+        Number(legacy[2]),
+        Number(legacy[3]),
+        legacy[4] === undefined ? 1 : Number(legacy[4]),
+      ];
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.clearRect(0, 0, 1, 1);
+    context.fillStyle = value;
+    context.fillRect(0, 0, 1, 1);
+    const pixel = context.getImageData(0, 0, 1, 1).data;
+    return [pixel[0], pixel[1], pixel[2], pixel[3] / 255];
+  };
+  const over = (foreground, background) => {
+    const alpha = foreground[3] + background[3] * (1 - foreground[3]);
+    if (alpha === 0) return [0, 0, 0, 0];
+    const channel = (index) => (
+      foreground[index] * foreground[3]
+      + background[index] * background[3] * (1 - foreground[3])
+    ) / alpha;
+    return [channel(0), channel(1), channel(2), alpha];
+  };
+  const layers = [];
+  for (let current = node; current; current = current.parentElement) {
+    layers.push(parseColor(getComputedStyle(current).backgroundColor));
+  }
+  let result = [255, 255, 255, 1];
+  for (let index = layers.length - 1; index >= 0; index -= 1) {
+    result = over(layers[index], result);
+  }
+  const channels = result.slice(0, 3).map((channel) => Math.round(channel));
+  if (result[3] >= 1) return `rgb(${channels.join(', ')})`;
+  return `rgba(${channels.join(', ')}, ${Number(result[3].toFixed(3))})`;
+}
+"""
+
 
 def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def parse_rgb_channels(value: Any) -> tuple[float, float, float] | None:
+    if not isinstance(value, str) or not (match := RGB_COLOR_PATTERN.fullmatch(value)):
+        return None
+    try:
+        channels = tuple(float(match.group(index)) for index in range(1, 4))
+        alpha = 1.0 if match.group(4) is None else float(match.group(4))
+    except ValueError:
+        return None
+    if any(channel < 0 or channel > 255 for channel in channels) or not 0 <= alpha <= 1:
+        return None
+    return channels
+
+
+def background_colors_match(left: Any, right: Any) -> bool:
+    left_channels = parse_rgb_channels(left)
+    right_channels = parse_rgb_channels(right)
+    if left_channels is None or right_channels is None:
+        return left == right
+    return all(
+        abs(left_channel - right_channel) <= BACKGROUND_RGB_CHANNEL_TOLERANCE
+        for left_channel, right_channel in zip(left_channels, right_channels, strict=True)
+    )
 
 
 def locator_values(page: Any, selector: str, mode: str, property_name: str = "") -> Any:
@@ -26,10 +101,19 @@ def locator_values(page: Any, selector: str, mode: str, property_name: str = "")
     if mode == "count":
         return locator.count()
     if not locator.count():
-        return "ELEMENT_MISSING" if mode != "texts" else []
+        return [] if mode in {"texts", "direct_texts"} else "ELEMENT_MISSING"
     if mode == "texts":
         return [normalize_text(item) for item in locator.all_text_contents() if normalize_text(item)]
+    if mode == "direct_texts":
+        values = locator.evaluate_all(
+            """nodes => nodes.map(node => Array.from(node.childNodes)
+              .filter(child => child.nodeType === Node.TEXT_NODE)
+              .map(child => child.textContent || '').join(' '))"""
+        )
+        return [normalize_text(item) for item in values if normalize_text(item)]
     if mode == "style":
+        if property_name.replace("-", "").lower() == "backgroundcolor":
+            return locator.first.evaluate(EFFECTIVE_BACKGROUND_EVALUATOR)
         return locator.first.evaluate("(node, prop) => getComputedStyle(node)[prop]", property_name)
     if mode == "metric":
         return locator.first.evaluate(
@@ -49,14 +133,20 @@ def run_check(prototype_page: Any, live_page: Any, check: dict[str, Any]) -> dic
         right = locator_values(live_page, live_selector, "count")
         passed = left > 0 and right > 0 if kind == "presence" else left > 0 and left == right
     elif kind == "textList":
-        left = locator_values(prototype_page, prototype_selector, "texts")
-        right = locator_values(live_page, live_selector, "texts")
+        text_mode = "direct_texts" if check.get("text_mode") == "direct" else "texts"
+        left = locator_values(prototype_page, prototype_selector, text_mode)
+        right = locator_values(live_page, live_selector, text_mode)
         passed = bool(left) and left == right
     elif kind == "style":
         prop = check.get("property", "")
         left = locator_values(prototype_page, prototype_selector, "style", prop)
         right = locator_values(live_page, live_selector, "style", prop)
-        passed = left != "ELEMENT_MISSING" and left == right
+        if "ELEMENT_MISSING" in {left, right}:
+            passed = False
+        elif prop.replace("-", "").lower() == "backgroundcolor":
+            passed = background_colors_match(left, right)
+        else:
+            passed = left == right
     elif kind == "metric":
         metric = check.get("metric", "")
         left = locator_values(prototype_page, prototype_selector, "metric", metric)
@@ -76,14 +166,20 @@ def run_check(prototype_page: Any, live_page: Any, check: dict[str, Any]) -> dic
     return {"label": label, "prototypeActual": left, "liveActual": right, "passed": passed}
 
 
-def apply_actions(page: Any, actions: list[dict[str, Any]]) -> None:
+def apply_actions(page: Any, actions: list[dict[str, Any]], environment: dict[str, str]) -> None:
     for action in actions:
         kind = action.get("action")
         selector = action.get("selector", "")
         if kind == "click":
             page.locator(selector).click()
         elif kind == "fill":
-            page.locator(selector).fill(str(action.get("value", "")))
+            value = action.get("value")
+            value_env = action.get("value_env")
+            if value_env is not None:
+                value = environment.get(value_env)
+                if not value:
+                    raise ValueError(f"prepare fill 环境变量缺失: {value_env}")
+            page.locator(selector).fill(str(value or ""))
         elif kind == "press":
             page.locator(selector).press(str(action.get("key", "Enter")))
         elif kind == "wait":
@@ -92,7 +188,14 @@ def apply_actions(page: Any, actions: list[dict[str, Any]]) -> None:
             raise ValueError(f"不支持的 prepare action: {kind}")
 
 
-def audit(sprint: str, plan: dict[str, Any], root: Path, web_base: str, screenshot_root: Path) -> dict[str, Any]:
+def audit(
+    sprint: str,
+    plan: dict[str, Any],
+    root: Path,
+    web_base: str,
+    screenshot_root: Path,
+    environment: dict[str, str] | None = None,
+) -> dict[str, Any]:
     report: dict[str, Any] = {
         "sprintId": sprint,
         "collectedAt": datetime.now(UTC).isoformat(),
@@ -100,6 +203,7 @@ def audit(sprint: str, plan: dict[str, Any], root: Path, web_base: str, screensh
         "required": plan["required"],
         "reason": plan.get("reason", ""),
         "pages": [],
+        "runId": (environment or {}).get("HARNESS_QUALITY_RUN_ID"),
     }
     if not plan["required"]:
         report.update({"mode": "not-required", "passed": True})
@@ -126,9 +230,9 @@ def audit(sprint: str, plan: dict[str, Any], root: Path, web_base: str, screensh
                 prototype.goto((root / prototype_target["path"]).resolve().as_uri(), wait_until="domcontentloaded")
                 live.goto(web_base.rstrip("/") + live_target["path"], wait_until="networkidle")
                 for page, target in ((prototype, prototype_target), (live, live_target)):
+                    apply_actions(page, target.get("prepare", []), environment or {})
                     if target.get("ready_selector"):
                         page.locator(target["ready_selector"]).first.wait_for(state="visible", timeout=10_000)
-                    apply_actions(page, target.get("prepare", []))
                     page.wait_for_timeout(1200)
                 checks = [run_check(prototype, live, item) for item in contract["checks"]]
                 name = re.sub(r"[^A-Za-z0-9_-]", "-", contract.get("screenshot_name", contract["name"]))
@@ -174,7 +278,12 @@ def main() -> int:
     args = parser.parse_args()
     try:
         report = audit(
-            args.sprint, load_contracts(args.contracts, args.sprint), Path.cwd(), args.web_url, args.screenshot_dir
+            args.sprint,
+            load_contracts(args.contracts, args.sprint),
+            Path.cwd(),
+            args.web_url,
+            args.screenshot_dir,
+            dict(os.environ),
         )
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"❌ {exc}")

@@ -19,7 +19,7 @@ developer_instructions = """
 ## 执行流程
 
 1. 接收产出物路径 + 任务类型 + 规范路径 + 验收条件
-2. 读取 `PROJECT_RULES.md` + 对应规范
+2. 读取 `PROJECT_RULES.md` + 对应规范；`task-context.requirements.access=direct` 时以其 `path/source_stories/sha256` 审查产物是否保持当前 Story/AC，`access=integrity-only` 时只验证摘要未漂移并以投影后的 `upstream_inputs` 审查当前任务；task-context 返回 `architecture` 时同时以其 `path/sha256` 审查架构约束；只接受 `upstream_inputs` 精确绑定的 task/run、Review report 和 artifact，任一输入漂移都不得继续 Review
 3. 读取 `task-context.open_findings`，先验证既有 finding；重试轮只有既有问题关闭后才继续最终 Full Review
 4. 逐项审查，每项绑定稳定 `acceptance_id` 并给出证据
 5. 代码评审完成后可运行 `uv run --project .harness/runtime harness doc-lint` 和 `uv run --project .harness/runtime harness code-garden`；文档治理专项可建议用户手动运行 `uv run --project .harness/runtime harness doc-garden`
@@ -50,12 +50,15 @@ developer_instructions = """
 ### Review JSON 契约
 
 - 顶层字段：`decision`（`pass|fail|incomplete`）、`scope`（`focused|full`）、`findings`、`criteria`
-- finding 必填：`finding_id`、跨轮稳定 `finding_key`、`finding_type`、`acceptance_id`、`severity`、`evidence`、`impact`、`remediation`、`blocking`、`violated_invariant`、`scenario`、`observable_failure`、`quality_attributes`、`scope_relation`
+- outcome 终态任务 PASS 时还必须包含 `outcome`：绑定当前 `planning_contract_sha256`、`result: passed`，以及逐条 `acceptance/path/sha256/observed/result` 结构化观察；每个 path 同时作为本轮 Review artifact 记录，Review 必须亲自核验 expected/observed 并给出 `result: pass`，不能让后续命令自行拼接结论
+- finding 必填：`finding_id`、跨轮稳定 `finding_key`、`finding_type`、`acceptance_id`、`severity`、`evidence`、`impact`、`remediation`、`blocking`、`violated_invariant`、`scenario`、`observable_failure`、`quality_attributes`、`scope_relation`；`scope_conflict` 还必须声明 `responsible_scope: story|product|design|technical-design`
 - `finding_type`：`defect|regression|evidence_gap|environment_blocker|scope_conflict`
 - `quality_attributes`：从 correctness/reliability/availability/scalability/concurrency/security/maintainability/simplicity/performance/operability/test_assurance 中选择
 - criterion 必填：`acceptance_id`、`status`（`pass|fail|incomplete|not-reviewed`），可附 `evidence`
 - `focused` 只用于修复定位，不能产生最终 PASS；最终 PASS 必须为 `full`，覆盖并通过全部验收 ID，且无 blocking finding
 - 只有 `in_scope|regression` 的 `defect|regression` 可以 blocking；证据、环境和范围问题使用 INCOMPLETE
+- 上游信源错误使用 `scope_conflict` + INCOMPLETE；Review 不修改上游，前台记录 Review 后必须调用 `task-reopen` 从责任域传递性回退
+- 文档类任务 PASS 前核验当前 Task/Run 的 draft 行、文档 SHA-256 与 artifact；PASS 后只接受 Runtime 生成的本 attempt publication receipt 作为不可变发布证据
 
 ### 反 AI 味道检查（设计/产品类产出物）
 

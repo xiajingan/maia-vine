@@ -3,7 +3,7 @@
   Harness HTML Prototype Base Template
   - 单文件、零外网依赖、可直接浏览器打开
   - 内联 tokens.css（与应用入口同源）保证视觉一致性
-  - 必须包含 mobile (375px) + desktop (1280px) 两个画板
+  - 只保留项目 impact_surfaces 声明的目标设备/Profile 与适用状态
   - 设计稿请保存至 docs/design-docs/prototypes/<feature>.html
 -->
 <html lang="zh-CN">
@@ -34,10 +34,10 @@
     *{box-sizing:border-box}
     body{margin:0;font-family:var(--font-sans);background:var(--color-bg);color:var(--color-text);font-size:var(--text-sm);line-height:1.5}
     h1,h2,h3,h4,p{margin:0}
-    .page{max-width:var(--container-dashboard,1280px);margin:0 auto;padding:var(--space-8) var(--space-6) calc(var(--space-8) * 2)}
+    .page{max-width:var(--container-target,100%);margin:0 auto;padding:var(--space-8) var(--space-6) calc(var(--space-8) * 2)}
     .lead{margin-top:var(--space-2);color:var(--color-text-muted)}
     .stack{display:grid;gap:var(--space-6);margin-top:var(--space-6)}
-    .split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-6)}
+    .split{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,18rem),1fr));gap:var(--space-6)}
     .panel{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-2xl);padding:var(--space-5)}
     .artboard{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-xl);padding:var(--space-5)}
     .board-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-4)}
@@ -59,22 +59,18 @@
     .muted{color:var(--color-text-muted)}
     .skeleton{background:linear-gradient(90deg,#e5e7eb,#f3f4f6,#e5e7eb);background-size:200% 100%;animation:sk 1.5s linear infinite;border-radius:var(--radius-full);height:12px}
     @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
-    /* mobile shell (375px baseline) */
-    .mobile-shell{width:375px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:28px;padding:var(--space-3);margin:0 auto;box-shadow:var(--shadow-md)}
-    .mobile-card{border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:var(--space-3);margin-top:var(--space-3)}
-    @media (max-width:1100px){.split{grid-template-columns:1fr}.mobile-shell{width:100%}}
   </style>
 </head>
 <body>
   <div class="page">
     <h1>[Feature] Prototype</h1>
-    <p class="lead">关联 User Story：US-XXX。覆盖：主路径 / 异常路径 / 状态板 / mobile + desktop。</p>
+    <p class="lead">关联 User Story/AC：US-XXX。目标 Profile：[项目声明]。覆盖：[本次适用路径与状态]。</p>
 
-    <!-- 1. 桌面端主流程 (1280px) -->
+    <!-- 1. 目标 Profile 主流程；按项目 token 设置容器和断点 -->
     <section class="panel" style="margin-top:var(--space-6)">
       <div class="board-title">
-        <h2>1. Desktop · 1280px</h2>
-        <span class="tag">PageName.vue</span>
+        <h2>1. Target Profile · [width/context]</h2>
+        <span class="tag">[Affected view]</span>
       </div>
       <div class="artboard">
         <!-- 在此填入主路径设计 -->
@@ -87,29 +83,11 @@
       </div>
     </section>
 
-    <!-- 2. 状态板（必填） -->
+    <!-- 2. 适用状态证据：复制 artboard 只覆盖 UI_DESIGN_SYSTEM §5 判定为适用的状态 -->
     <section class="panel">
-      <div class="board-title"><h2>2. 状态板</h2></div>
+      <div class="board-title"><h2>2. Applicable states</h2></div>
       <div class="split">
-        <div class="artboard"><h3>空态</h3><p class="caption">主标题 + 单句解释 + 单一 CTA</p></div>
-        <div class="artboard"><h3>加载</h3>
-          <div class="skeleton" style="width:60%"></div>
-          <div class="skeleton" style="width:80%;margin-top:8px"></div>
-        </div>
-        <div class="artboard"><h3>错误</h3><p class="bad" style="display:inline-block;padding:8px 12px;border-radius:var(--radius-md)">接口失败 · <a href="#">重试</a></p></div>
-        <div class="artboard"><h3>成功 / 部分加载</h3><span class="tag ok">已保存</span></div>
-      </div>
-    </section>
-
-    <!-- 3. 移动端 (375px) -->
-    <section class="panel">
-      <div class="board-title"><h2>3. Mobile · 375px</h2></div>
-      <div class="mobile-shell">
-        <div class="mobile-card">
-          <strong>主标题</strong>
-          <p class="caption">副文案，用于解释当前任务与下一步。</p>
-          <button class="btn btn-primary" style="width:100%;margin-top:var(--space-3)">主 CTA</button>
-        </div>
+        <div class="artboard"><h3>[S-ID · 状态]</h3><p class="caption">[触发依据、画面与恢复/下一动作]</p></div>
       </div>
     </section>
   </div>

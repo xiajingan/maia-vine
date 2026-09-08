@@ -24,7 +24,21 @@ NOTES_TEMPLATE = """# Release vX.Y.Z
 - **责任人**：<release manager>
 - **变更类型**：feat | fix | refactor | chore（多选）
 """
-MIGRATION_TEMPLATE = 'version: 1\nrelease: vX.Y.Z\ncreated_at: ""\ncreated_by: ""\nitems: []\nsignature: ""\n'
+MIGRATION_TEMPLATE = """version: 1
+release: vX.Y.Z
+created_at: ""
+created_by: ""
+execution:
+  business_upgrade_rollback: forbidden
+  progress_model: checkpoint
+  candidate_on_failure: preserve
+  resume_from: last-committed-checkpoint
+  data_rollback: forbidden
+  failure_phases: [migration, quality-check, service-start, release]
+  rollback_authority: explicit-human-release-rollback
+items: []
+signature: ""
+"""
 
 
 def ensure_version(version: str) -> None:

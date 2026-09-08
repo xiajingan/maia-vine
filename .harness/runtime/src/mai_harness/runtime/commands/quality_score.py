@@ -24,6 +24,11 @@ from pathlib import Path
 from typing import Any
 
 from mai_harness.runtime.application.performance_evidence import collect_backend_performance
+from mai_harness.runtime.domain.execution_evidence import (
+    EXECUTION_EVIDENCE_VERSION,
+    assert_matching_execution_evidence,
+    validate_execution_evidence,
+)
 from mai_harness.runtime.infrastructure.core.command import harness_command
 from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
 from mai_harness.runtime.infrastructure.core.process import ManagedProcess
@@ -47,6 +52,19 @@ DIMENSION_KEYS = {
 RUNTIME_POLL_SECONDS = 0.1
 HANDOFF_MODE = 0o600
 RESERVED_HANDOFF_PREFIX = "HARNESS_QUALITY_"
+REDACTION_MARKER = "[REDACTED]"
+_AUTHORIZATION_CREDENTIAL = re.compile(
+    r"(?i)(\bauthorization\s*[:=]\s*)(?:bearer|basic)\s+[^\s,;]+"
+)
+_URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s]+@")
+_SENSITIVE_KEY = r"(?:password|secret|token|api[_-]?key|access[_-]?token|client[_-]?secret|authorization)"
+_QUOTED_SENSITIVE_VALUE = re.compile(
+    rf"(?i)(?P<prefix>(?:[\"']?{_SENSITIVE_KEY}[\"']?)\s*[:=]\s*)"
+    r"(?P<quote>[\"'])(?P<value>.*?)(?P=quote)"
+)
+_UNQUOTED_SENSITIVE_VALUE = re.compile(
+    rf"(?i)(\b{_SENSITIVE_KEY}\b\s*[:=]\s*)[^\s,;}}]+"
+)
 
 
 class QualityRuntimeSignal(RuntimeError):
@@ -387,6 +405,52 @@ def build_unit_test_env(environment: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def _sanitize_unit_diagnostic(value: str) -> str:
+    """Remove supported credential forms while preserving useful diagnostics."""
+    sanitized = _AUTHORIZATION_CREDENTIAL.sub(rf"\1{REDACTION_MARKER}", value)
+    sanitized = _URL_USERINFO.sub(rf"\1{REDACTION_MARKER}@", sanitized)
+    sanitized = _QUOTED_SENSITIVE_VALUE.sub(
+        lambda match: (
+            f"{match.group('prefix')}{match.group('quote')}"
+            f"{REDACTION_MARKER}{match.group('quote')}"
+        ),
+        sanitized,
+    )
+    return _UNQUOTED_SENSITIVE_VALUE.sub(rf"\1{REDACTION_MARKER}", sanitized)
+
+
+def run_unique_unit_commands(
+    unit_names: list[str], commands: Mapping[str, Any], root: Path
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Execute each normalized argv once while retaining its component mapping."""
+    grouped: dict[tuple[str, ...], dict[str, Any]] = {}
+    for name in unit_names:
+        argv = resolve_command(commands.get(name, []))
+        key = tuple(argv)
+        if not argv:
+            grouped.setdefault(key, {"argv": [], "components": []})["components"].append(name)
+            continue
+        grouped.setdefault(key, {"argv": argv, "components": []})["components"].append(name)
+    evidence: list[dict[str, Any]] = []
+    all_ok = bool(grouped)
+    for record in grouped.values():
+        argv = record["argv"]
+        result = (
+            try_run(argv, cwd=root, env=build_unit_test_env(os.environ), inherit_env=False)
+            if argv
+            else CommandResult(False, "", "", 127)
+        )
+        diagnostic = _sanitize_unit_diagnostic(result.stderr or result.stdout)
+        evidence.append({
+            "components": record["components"],
+            "argv": argv,
+            "exitCode": result.returncode,
+            "diagnosticTail": diagnostic[-1000:],
+        })
+        all_ok = all_ok and result.ok
+    return all_ok, evidence
+
+
 def remote_e2e_env(environment: Mapping[str, str]) -> dict[str, str]:
     output = {
         key: environment[key]
@@ -502,28 +566,86 @@ def _artifact_mime(path: Path) -> str:
     return "application/octet-stream"
 
 
-def load_action_evidence(root: Path, artifact_path: str, expected_run_id: str) -> dict[str, Any]:
+def _load_project_json(root: Path, artifact_path: str, label: str) -> tuple[Path, dict[str, Any]]:
     root = root.resolve()
-    manifest = (root / artifact_path).resolve()
-    if root not in manifest.parents or not manifest.is_file() or (root / artifact_path).is_symlink():
-        raise ValueError("quality action evidence manifest 路径无效")
-    try:
-        document = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("quality action evidence manifest 不是合法 JSON") from exc
-    live_cases = document.get("liveCases") if isinstance(document, dict) else None
-    artifacts = document.get("artifacts") if isinstance(document, dict) else None
+    raw_path = Path(artifact_path)
+    source = root / raw_path
+    resolved = source.resolve()
     if (
-        not isinstance(document, dict)
-        or document.get("runId") != expected_run_id
-        or document.get("passed") is not True
-        or not isinstance(live_cases, list)
-        or not live_cases
-        or any(not isinstance(item, dict) or item.get("status") != "pass" for item in live_cases)
-        or not isinstance(artifacts, list)
-        or not artifacts
+        raw_path.is_absolute()
+        or ".." in raw_path.parts
+        or root not in resolved.parents
+        or source.is_symlink()
+        or not source.is_file()
     ):
-        raise ValueError("quality action evidence manifest 结果或 run ID 无效")
+        raise ValueError(f"{label} 路径无效")
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} 不是合法 JSON") from exc
+    if not isinstance(document, dict):
+        raise ValueError(f"{label} 必须是对象")
+    return source, document
+
+
+def _indexed_cases(items: list[Any], label: str) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]:
+            raise ValueError(f"quality action evidence {label} case 格式无效")
+        if item["id"] in result:
+            raise ValueError(f"quality action evidence {label} case 重复")
+        result[item["id"]] = item
+    return result
+
+
+def _validate_v1_execution_inventory(document: Mapping[str, Any], policy: Mapping[str, Any]) -> None:
+    selected = document.get("selectedCases")
+    executed = document.get("executedCases")
+    deferred = document.get("deferredCases")
+    summary = document.get("executionSummary")
+    if any(not isinstance(group, list) for group in (selected, executed, deferred)):
+        raise ValueError("quality action evidence execution inventory 缺失")
+    selected = list(selected)
+    executed = list(executed)
+    deferred = list(deferred)
+    selected_by_id = _indexed_cases(selected, "selected")
+    executed_by_id = _indexed_cases(executed, "executed")
+    deferred_by_id = _indexed_cases(deferred, "deferred")
+    combined = {**executed_by_id, **deferred_by_id}
+    if (
+        not executed
+        or set(executed_by_id) & set(deferred_by_id)
+        or set(selected_by_id) != set(combined)
+        or any(selected_by_id[case_id] != combined[case_id] for case_id in selected_by_id)
+    ):
+        raise ValueError("quality action evidence selected/executed/deferred 覆盖无效")
+    executed_values = set(policy.get("executed_dispositions", []))
+    deferred_values = set(policy.get("deferred_dispositions", []))
+    if any(item.get("disposition") not in executed_values or item.get("status") != "pass" for item in executed):
+        raise ValueError("quality action evidence executed case 未全部通过或 disposition 无效")
+    if any(
+        item.get("disposition") not in deferred_values
+        or item.get("status") == "pass"
+        or not isinstance(item.get("destination"), str)
+        or not item["destination"].strip()
+        for item in deferred
+    ):
+        raise ValueError("quality action evidence deferred case 状态、disposition 或 destination 无效")
+    expected_summary = {
+        "selectedCaseCount": len(selected),
+        "executedCaseCount": len(executed),
+        "passedCaseCount": len(executed),
+        "scoredCaseCount": len(executed),
+        "deferredCaseCount": len(deferred),
+    }
+    if not isinstance(summary, dict) or any(summary.get(key) != value for key, value in expected_summary.items()):
+        raise ValueError("quality action evidence execution summary 计分或数量无效")
+
+
+def _validate_bound_artifacts(root: Path, artifacts: Any) -> None:
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("quality action evidence artifacts 无效")
     seen: set[str] = set()
     for item in artifacts:
         if not isinstance(item, dict):
@@ -542,6 +664,53 @@ def load_action_evidence(root: Path, artifact_path: str, expected_run_id: str) -
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         if item.get("sha256") != digest or item.get("mimeType") != _artifact_mime(source):
             raise ValueError("quality action evidence artifact digest 或 MIME 不匹配")
+
+
+def load_execution_evidence(
+    root: Path, artifact_path: str, expected_run_id: str, execution_policy: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Load one v2 E2E execution artifact through the shared formal validator."""
+    _, document = _load_project_json(root, artifact_path, "quality E2E execution evidence")
+    normalized = validate_execution_evidence(document, execution_policy, expected_run_id)
+    if normalized.get("evidenceValid") is not True:
+        raise ValueError("quality E2E execution evidence 无效")
+    return normalized
+
+
+def load_action_evidence(
+    root: Path,
+    artifact_path: str,
+    expected_run_id: str,
+    execution_policy: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    _, document = _load_project_json(root, artifact_path, "quality action evidence manifest")
+    policy = execution_policy or {}
+    artifacts = document.get("artifacts")
+    if document.get("runId") != expected_run_id:
+        raise ValueError("quality action evidence manifest run ID 无效")
+    _validate_bound_artifacts(root.resolve(), artifacts)
+    if policy.get("execution_evidence_version") == EXECUTION_EVIDENCE_VERSION:
+        e2e_path = policy.get("e2e_artifact", "")
+        if not any(isinstance(item, dict) and item.get("path") == e2e_path for item in artifacts):
+            raise ValueError("quality action evidence 未绑定配置的 E2E artifact")
+        e2e = load_execution_evidence(root, e2e_path, expected_run_id, policy)
+        normalized = validate_execution_evidence(document, policy, expected_run_id)
+        if normalized.get("evidenceValid") is not True:
+            raise ValueError("quality action evidence evidenceValid=false")
+        assert_matching_execution_evidence(normalized, e2e)
+        return normalized
+    if document.get("passed") is not True:
+        raise ValueError("quality action evidence manifest 结果无效")
+    if policy.get("enabled") is True:
+        _validate_v1_execution_inventory(document, policy)
+    else:
+        live_cases = document.get("liveCases")
+        if (
+            not isinstance(live_cases, list)
+            or not live_cases
+            or any(not isinstance(item, dict) or item.get("status") != "pass" for item in live_cases)
+        ):
+            raise ValueError("quality action evidence manifest 结果或 run ID 无效")
     return document
 
 
@@ -564,9 +733,45 @@ def collect_action_evidence(
         run_id = (environment or {}).get("HARNESS_QUALITY_RUN_ID", "")
         if not run_id:
             raise ValueError("quality action evidence 缺少 quality run ID")
-        score.evidence["action_evidence"] = load_action_evidence(root, config["artifact"], run_id)
+        score.evidence["action_evidence"] = load_action_evidence(
+            root, config["artifact"], run_id, config.get("execution_policy")
+        )
     except ValueError as exc:
         score.hard_failures.append(str(exc))
+
+
+def _configured_e2e_result(
+    result: CommandResult,
+    root: Path,
+    harness: Mapping[str, Any],
+    environment: Mapping[str, str] | None,
+) -> tuple[bool, dict[str, Any] | None, str | None]:
+    policy = harness["quality"].get("action_evidence", {}).get("execution_policy", {})
+    if policy.get("execution_evidence_version") != EXECUTION_EVIDENCE_VERSION:
+        return result.ok, None, None
+    run_id = (environment or {}).get("HARNESS_QUALITY_RUN_ID", "")
+    try:
+        if not run_id:
+            raise ValueError("quality E2E execution evidence 缺少 quality run ID")
+        evidence = load_execution_evidence(root, policy.get("e2e_artifact", ""), run_id, policy)
+    except ValueError as exc:
+        return False, None, str(exc)
+    return result.ok and evidence["scoreEligible"] is True, evidence, None
+
+
+def _execution_evidence_section(evidence: Mapping[str, Any] | None) -> str:
+    if not evidence:
+        return ""
+    summary = evidence.get("executionSummary", {})
+    return (
+        f"\n- Evidence valid: {evidence.get('evidenceValid')}"
+        f"\n- Evidence passed: {evidence.get('passed')}"
+        f"\n- Outcome: {evidence.get('executionOutcome')}"
+        f"\n- Runner invocations: {summary.get('runnerInvocationCount', 0)}"
+        f"\n- Partitions: executed={summary.get('executedCaseCount', 0)}, "
+        f"deferred={summary.get('deferredCaseCount', 0)}, excluded={summary.get('excludedCaseCount', 0)}, "
+        f"live={summary.get('liveCaseCount', 0)}"
+    )
 
 
 def calculate_runtime_dimensions(
@@ -604,6 +809,12 @@ def calculate_runtime_dimensions(
         "--report-dir",
         str(root / ".harness/verify-reports"),
     ]
+    if managed_runtime and health_applicable:
+        api_url = str((environment or {}).get("API_URL", ""))
+        web_url = str((environment or {}).get("WEB_URL", ""))
+        if not api_url or not web_url:
+            raise ValueError("managed quality handoff 缺少 API_URL/WEB_URL")
+        health_command.extend(["--api-url", api_url, "--web-url", web_url])
     health = run_consumer(health_command) if health_applicable else None
     health_score = weights["服务健康"] if not health_applicable or (health and health.ok) else 0
     if health_applicable and not health_score:
@@ -619,10 +830,14 @@ def calculate_runtime_dimensions(
     fallback = sorted(paths.e2e.rglob("*.spec.*")) if paths.e2e.exists() else []
     configured_e2e = resolve_command(commands.get("e2e", []))
     e2e_applicable = dimension_applies(dimensions, "e2e", project_type)
+    execution_evidence: dict[str, Any] | None = None
+    execution_error: str | None = None
     if not e2e_applicable or harness.get("gates", {}).get("require_e2e") is False:
         e2e_ok = True
     elif configured_e2e:
-        e2e_ok = run_consumer(configured_e2e).ok
+        e2e_ok, execution_evidence, execution_error = _configured_e2e_result(
+            run_consumer(configured_e2e), root, harness, environment
+        )
     elif e2e_cases:
         e2e_ok = True
         for case in e2e_cases:
@@ -634,10 +849,15 @@ def calculate_runtime_dimensions(
         e2e_ok = run_consumer(build_playwright_command()).ok
     else:
         e2e_ok = False
+    if execution_evidence:
+        score.evidence["e2e_execution"] = execution_evidence
+    if execution_error:
+        score.hard_failures.append(execution_error)
     score.add(
         "E2E 测试",
         weights["E2E 测试"] if e2e_ok else 0,
-        f"- 适用: {e2e_applicable}\n- 当前用例: {len(current)}\n- 结果: {e2e_ok}",
+        f"- 适用: {e2e_applicable}\n- 当前用例: {len(current)}\n- 结果: {e2e_ok}"
+        f"{_execution_evidence_section(execution_evidence)}",
     )
     ui_applicable = dimension_applies(dimensions, "ui_parity", project_type)
     ui_commands = [
@@ -651,6 +871,8 @@ def calculate_runtime_dimensions(
             str(coverage_dir / "ui-audit.json"),
             "--screenshot-dir",
             str(coverage_dir / "ui-audit"),
+            "--web-url",
+            str((environment or {}).get("WEB_URL", harness.get("verification", {}).get("web_url", ""))),
         ],
     ]
     ui_gate_results = [run_consumer(command).ok for command in ui_commands] if ui_applicable else [True] * 3
@@ -775,10 +997,8 @@ def calculate(sprint: str, level: str, threshold: int, root: Path, coverage_dir:
         defaults_path=paths.framework_config / "technology.defaults.yml",
     )
     unit_names = unit_command_names(technology, harness["project"]["type"])
-    unit_commands = [resolve_command(commands.get(name, [])) for name in unit_names]
-    unit_ok = bool(unit_commands) and all(
-        command and try_run(command, cwd=root, env=build_unit_test_env(os.environ)).ok for command in unit_commands
-    )
+    unit_ok, unit_evidence = run_unique_unit_commands(unit_names, commands, root)
+    score.evidence["unit_commands"] = unit_evidence
     coverage = coverage_percent(coverage_dir)
     unit_max = weights["单元测试 + 覆盖率"]
     unit = (
@@ -804,7 +1024,9 @@ def calculate(sprint: str, level: str, threshold: int, root: Path, coverage_dir:
         and not {"node_modules", ".git", "coverage"}.intersection(path.parts)
     ]
     integration_command = resolve_command(commands.get("integration", [])) if integration_applicable else []
-    integration_ok = bool(integration_command and try_run(integration_command, cwd=root).ok)
+    runtime_config = harness["quality"].get("runtime", {})
+    runtime_enabled = bool(runtime_config.get("command")) and runtime_dimensions_apply(harness)
+    integration_ok = False if runtime_enabled else bool(integration_command and try_run(integration_command, cwd=root).ok)
     integration = (
         weights["集成测试"]
         if not integration_applicable
@@ -823,13 +1045,25 @@ def calculate(sprint: str, level: str, threshold: int, root: Path, coverage_dir:
         integration,
         f"- 适用: {integration_applicable}\n- 测试文件: {len(integration_files)}\n- 通过: {integration_ok}",
     )
-    runtime_config = harness["quality"].get("runtime", {})
-    runtime_enabled = bool(runtime_config.get("command")) and runtime_dimensions_apply(harness)
     if not runtime_enabled:
         calculate_runtime_dimensions(score, sprint, level, root, coverage_dir, harness, paths)
         return score
 
     def consume(environment: Mapping[str, str]) -> None:
+        if integration_applicable:
+            result = run_runtime_command(
+                integration_command,
+                cwd=root,
+                environment=environment,
+                timeout=float(runtime_config["startup_timeout_seconds"]),
+            )
+            for index, (label, _value, maximum) in enumerate(score.details):
+                if label == "集成测试":
+                    score.details[index] = (label, maximum if result.ok else 0, maximum)
+                    score.sections[index] = (
+                        f"- 适用: True\n- 测试文件: {len(integration_files)}\n- 通过: {result.ok}\n- Managed handoff: True"
+                    )
+                    break
         calculate_runtime_dimensions(
             score,
             sprint,
@@ -850,19 +1084,28 @@ def _evidence_markdown(score: Score) -> list[str]:
     action = score.evidence.get("action_evidence")
     if not isinstance(action, dict):
         return []
+    cases = (
+        action.get("selectedCases") if isinstance(action.get("selectedCases"), list) else action.get("liveCases", [])
+    )
     rows = [
         "## Action Evidence",
         "",
         f"- Run ID: `{action.get('runId', '')}`",
+        f"- Evidence valid: `{action.get('evidenceValid', 'legacy')}`",
+        f"- Passed: `{action.get('passed', '')}`",
+        f"- Execution outcome: `{action.get('executionOutcome', 'legacy')}`",
+        f"- Score eligible: `{action.get('scoreEligible', 'legacy')}`",
+        f"- Reasons: {'；'.join(action.get('reasons', [])) or '—'}",
         "",
-        "### Live cases",
+        "### Selected cases",
         "",
-        "| Case | Spec | Status |",
-        "| --- | --- | --- |",
+        "| Case | Spec | Disposition | Status | Destination |",
+        "| --- | --- | --- | --- | --- |",
     ]
     rows.extend(
-        f"| {item.get('id', '')} | `{item.get('spec', '')}` | {item.get('status', '')} |"
-        for item in action.get("liveCases", [])
+        f"| {item.get('id', '')} | `{item.get('spec', '')}` | {item.get('disposition', 'executed')} | "
+        f"{item.get('status', '')} | {item.get('destination') or '—'} |"
+        for item in cases
         if isinstance(item, dict)
     )
     rows.extend(["", "### Bound artifacts", "", "| Path | MIME | SHA-256 |", "| --- | --- | --- |"])
@@ -897,6 +1140,26 @@ def _updated_report_index(score: Score, directory: Path, markdown: Path, generat
         raise ValueError("测试报告 index 目标条目重复或畸形")
     label = score.sprint.replace("sprint-", "Sprint ", 1)
     conclusion = "✅ 达标" if score.passed else "❌ 不达标"
+    action = score.evidence.get("action_evidence")
+    if isinstance(action, dict) and isinstance(action.get("executionSummary"), dict):
+        summary = action["executionSummary"]
+        if action.get("executionEvidenceVersion") == EXECUTION_EVIDENCE_VERSION:
+            conclusion += (
+                f"；evidenceValid={action.get('evidenceValid')}；passed={action.get('passed')}"
+                f"；outcome={action.get('executionOutcome')}；runner={summary.get('runnerInvocationCount', 0)}"
+                f"；executed={summary.get('executedCaseCount', 0)}"
+                f"；deferred={summary.get('deferredCaseCount', 0)}"
+                f"；excluded={summary.get('excludedCaseCount', 0)}；live={summary.get('liveCaseCount', 0)}"
+            )
+        else:
+            deferred = action.get("deferredCases", [])
+            destinations = sorted(
+                {item.get("destination") for item in deferred if isinstance(item, dict) and item.get("destination")}
+            )
+            conclusion += (
+                f"；executed {summary.get('passedCaseCount', 0)}/{summary.get('executedCaseCount', 0)} PASS"
+                f"；deferred {summary.get('deferredCaseCount', 0)} → {', '.join(destinations) or '—'}"
+            )
     row = (
         f"| {label} | [{basename}]({basename}) | {score.total}/100 | {conclusion} | "
         f"{generated_at.date().isoformat()} | draft |"

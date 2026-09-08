@@ -44,6 +44,7 @@
 - 新文件完全遵守当前规范；遗留文件未被任务扩大风险时采用 no-worse 基线，除非规范明确声明绝对门禁
 - Review remediation 是非权威建议；Plan 必须按根因和原始验收裁决，不得把建议自动转成新标准
 - 缺少证据不等于已证明产品缺陷。只有证据、环境或范围缺口时结论为 INCOMPLETE
+- 上游信源错误使用 `scope_conflict` + INCOMPLETE，并声明 `responsible_scope: story|product|design|technical-design`；Review 不修改上游，前台登记 Review 后调用 `task-reopen` 从责任域传递性回退
 
 ## 测试代码原则
 

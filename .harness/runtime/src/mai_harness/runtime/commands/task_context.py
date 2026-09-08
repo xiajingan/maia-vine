@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from mai_harness.runtime.application.task_evidence import (
+    ARCHITECTURE_BOUND_TASK_TYPES,
     PR_TASK_TYPES,
     acceptance_records,
     agent_invocation_id,
@@ -14,6 +15,11 @@ from mai_harness.runtime.application.task_evidence import (
     finding_ledger,
     require_ready_attempt,
     required_agent_roles,
+)
+from mai_harness.runtime.domain.sprint_context import (
+    sprint_header,
+    sprint_planning_contract,
+    sprint_uses_story_requirements,
 )
 from mai_harness.runtime.domain.task_protocol import execution_protocol, review_protocol
 from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
@@ -35,7 +41,8 @@ def main() -> int:
     root = Path.cwd().resolve()
     paths = HarnessPaths.detect(project=root)
     rules_path = paths.rules / "task-rules.yml"
-    task = (load_yaml(rules_path).get("tasks") or {}).get(args.task_type)
+    rules = load_yaml(rules_path)
+    task = (rules.get("tasks") or {}).get(args.task_type)
     if not task:
         parser.error(f"未知任务类型: {args.task_type}")
     try:
@@ -62,6 +69,7 @@ def main() -> int:
             }
             for role in sorted(required_agent_roles(task))
         }
+        upstream_inputs = (state.get("context") or {}).get("upstream_inputs", [])
         payload = {
             "run_id": state["run_id"],
             "attempt": state["attempt"],
@@ -76,7 +84,58 @@ def main() -> int:
             "execution_protocol": execution_protocol(task),
             "review_protocol": review_protocol(task),
             "agent_invocations": agent_invocations,
+            "upstream_inputs": upstream_inputs,
         }
+        contract = sprint_planning_contract(args.sprint)
+        sprint_type = sprint_header(args.sprint).get("sprint_type", "")
+        uses_stories = sprint_uses_story_requirements(sprint_type, contract)
+        preferred_inputs = (rules.get("task_input_projections") or {}).get(args.task_type, [])
+        requirements_are_integrity_only = bool(
+            uses_stories
+            and preferred_inputs
+            and any(item.get("task_type") in preferred_inputs for item in upstream_inputs)
+        )
+        payload["requirements"] = {
+            "mode": "stories" if uses_stories else contract.get("requirement_mode"),
+            "access": "integrity-only" if requirements_are_integrity_only else "direct",
+            "path": "USER_STORIES.md" if uses_stories and not requirements_are_integrity_only else None,
+            "source_stories": (
+                contract.get("source_stories") if uses_stories and not requirements_are_integrity_only else []
+            ),
+            "sha256": (state.get("context") or {}).get("requirements_sha256") if uses_stories else None,
+            "change_protocol": "修改后执行 harness sprint amend --reason <reason>" if uses_stories else None,
+            "reason": (
+                "需求摘要仅用于漂移门禁；本任务的直接派生输入是 upstream_inputs 中的技术方案"
+                if requirements_are_integrity_only
+                else None
+            ),
+        }
+        if args.task_type in ARCHITECTURE_BOUND_TASK_TYPES:
+            payload["architecture"] = {
+                "path": "ARCHITECTURE.md",
+                "sha256": (state.get("context") or {}).get("architecture_sha256"),
+                "change_protocol": "内容变化后重新运行当前任务 Preflight",
+            }
+        if entry_action := task.get("entry_action"):
+            payload["entry_action"] = {
+                "id": entry_action,
+                "after": "plan" if execution_protocol(task) == "agent" else "pre-exec",
+                "before": "exec" if execution_protocol(task) == "agent" else "completion",
+                "command": [
+                    "uv",
+                    "run",
+                    "--project",
+                    ".harness/runtime",
+                    "harness",
+                    "task-action",
+                    args.task_type,
+                    "--task-id",
+                    args.task_id,
+                    "entry",
+                    "--sprint",
+                    str(args.sprint),
+                ],
+            }
         if args.task_type in PR_TASK_TYPES:
             payload["git_identity"] = {
                 "policy": "registered-linear-head-v1",

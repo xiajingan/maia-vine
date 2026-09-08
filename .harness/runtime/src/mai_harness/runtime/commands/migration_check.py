@@ -6,8 +6,10 @@ import re
 import sys
 from pathlib import Path
 
+from mai_harness.runtime.application.migration_progress import policy_errors
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
-from mai_harness.runtime.infrastructure.utils import try_run
+from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
+from mai_harness.runtime.infrastructure.utils import load_yaml, try_run
 
 NAME = re.compile(r"^(\d{3}-[a-z0-9-]+)\.(up|down)\.sql$")
 
@@ -34,15 +36,29 @@ def validate(directory: Path, actions: set[str]) -> list[str]:
                 r"(^|\s)(COMMIT|ROLLBACK)\s*;", text, re.I
             ):
                 errors.append(f"{file.name}: 缺少事务包裹")
+    if "policy" in actions:
+        manifest_path = directory / "manifest.yml"
+        if not manifest_path.is_file():
+            errors.append(f"未找到 {manifest_path}")
+        else:
+            manifest = load_yaml(manifest_path)
+            rules_path = HarnessPaths.detect(project=Path.cwd()).rules / "task-rules.yml"
+            rules = load_yaml(rules_path) if rules_path.is_file() else {}
+            expected = rules.get("migration_execution_policy")
+            errors.extend(policy_errors(expected))
+            if isinstance(expected, dict) and manifest.get("execution") != expected:
+                errors.append("manifest.execution 必须与 task-rules.yml migration_execution_policy 完全一致")
     return errors
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("pair", "name", "sign", "dry-down", "idempotency", "rehearse", "all"))
+    parser.add_argument(
+        "action", choices=("pair", "name", "sign", "policy", "dry-down", "idempotency", "rehearse", "all")
+    )
     parser.add_argument("release_dir", type=Path)
     args = parser.parse_args()
-    actions = {"pair", "name", "dry-down"} if args.action == "all" else {args.action}
+    actions = {"pair", "name", "policy", "dry-down"} if args.action == "all" else {args.action}
     errors = validate(args.release_dir, actions)
     if args.action in {"sign", "all"} and not errors:
         manifest = args.release_dir / "manifest.yml"

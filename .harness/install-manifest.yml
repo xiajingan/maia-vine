@@ -2,13 +2,13 @@ ai: codex
 assets:
   .codex/agents/harness-exec.toml:
     policy: managed-overwrite
-    sha256: 994e0134e8669e6bbbcdb28ee97bd112579168b7dad82ecb216f80f32e14eb0f
+    sha256: 1d10fdac5a8627c526eef7a9599090f18bbd5a06596645631ae8e6c47d48ecaf
   .codex/agents/harness-plan.toml:
     policy: managed-overwrite
-    sha256: bf5725853c79acf26565f37178dd6c98c20360e2bd0b8f74fa08c8b511acb7b5
+    sha256: 1abe61ed78e6f3ef939f65cacd27446537e111ecf7bb81c47d2507fae0a41cf1
   .codex/agents/harness-review.toml:
     policy: managed-overwrite
-    sha256: 8120be87eef225600c4825ff03d1c89574ada83268455661a89b9af5195ef0ab
+    sha256: 9293784ce30c2328cd85ccc60bc0386735e6e1f553eeb6dc08fd7cc0e0b221d0
   .codex/config.toml:
     policy: managed-overwrite
     sha256: 3f8f6039ab4f93e29533b7c4b8fe968518019f84febe92ecb02c2d5b3a2c647b
@@ -20,10 +20,10 @@ assets:
     sha256: fac6d8d5f5db52bbdde75a6770b8dd2b68ed01eb598c80a87c82f8978a2acdfc
   .codex/skills/harness-managed/SKILL.md:
     policy: managed-overwrite
-    sha256: 7140ccf5bd9dabef58b9070895e9b8937c443af057173f08828679157c4ddf61
+    sha256: 337422fd9154e03f9171b7f86e2981942f88ffadd2c854611fac5b3131054007
   .codex/skills/harness-task/SKILL.md:
     policy: managed-overwrite
-    sha256: 6078aba99f8278f84ebeb77182a5c7ef32f5c788cc2f989e3833949bfa8a89b3
+    sha256: 3d4caf3d14e4d4d19409386afbb90a11cdb4538fe53f875a67852757bc8eb848
   .codex/skills/harness-task/agents/openai.yaml:
     policy: managed-overwrite
     sha256: f9e02e1063c0274908693acb5c4529dd205bb369d0fbe07e9532bd8462f9504d
@@ -92,73 +92,73 @@ assets:
     sha256: d7f77e955e4794854103463579a5f9877ac2ffd4d2acad5879a4d5003594aae1
   .harness/docs/CICD.md:
     policy: managed-overwrite
-    sha256: fecad4e6ea7f37e645eb3b6479c5ae5e89a14748ab702b1302fb101598b5d2b2
+    sha256: 382a4ba4e0a047cc15f49db63a23d31bd7a71f5aa50abb6b2ac5611fea9ac41d
   .harness/docs/CODE_REVIEW.md:
     policy: managed-overwrite
-    sha256: a1284cb1f250d4883b7b940dfda3e1f54d8ad0d63cef3c74e79052fac6914cd8
+    sha256: 99d7d8d68632a3683bd0cf5704e4eaa35ba5e83f7dcba4b22ee08e3f508ffabf
   .harness/docs/CODING_BACKEND.md:
     policy: managed-overwrite
-    sha256: 30fd8ad3a1faaf4241cf6f66b17b036f1bb3743c0326671aaeea76b82939fa28
+    sha256: f032819d8ba89ae90d93bb5fd77da4e6f95005654d98a66c60da2142054d99b6
   .harness/docs/CODING_FRONTEND.md:
     policy: managed-overwrite
-    sha256: 7bd9f9a275237e3b9d2f8a06f0dc75283a59402ab5479b973816bb4fe1dc5fa3
+    sha256: 881e198d532a4b84336703b1e08c989989538e81789993c9668c307cea2c6fd3
   .harness/docs/DESIGN.md:
     policy: managed-overwrite
-    sha256: 963274438a03ea58a2794e10048cf01adc09ceab81c473fea09aedf9f10cac6a
+    sha256: f7fd723d28a63db2213eebb2cd44db541c2017b117a9fabfbc88105cd287cfa9
   .harness/docs/GOLDEN_RULES.md:
     policy: managed-overwrite
-    sha256: 8d562ddcee53bbc97e6b19a7d39030a07452fd5eeaa40e2c603c65245b6a27fc
+    sha256: d2edb04108f7f773d3cc8de7db8485143a84e2f3e35fdf627bd27e0b919d7a0c
   .harness/docs/MIGRATION.md:
     policy: managed-overwrite
-    sha256: 084536ec8a4131fd8b3aafe4cba6eff194fd096f6f6de8d59cc9f63aebc1d6f2
+    sha256: 54f4f989539733d80227533e8443d69d552cb51d7773266ad415bf697ec696b5
   .harness/docs/MODE.md:
     policy: managed-overwrite
     sha256: 1da3c583f4943a9650ab97fbadd4ac39e05ba49ce4d631a946cd168aac56362f
   .harness/docs/OBSERVABILITY.md:
     policy: managed-overwrite
-    sha256: c34e4274a7891f5be59f0ad4992ac6deb5882d5542e2c726c0dfdc701ece3416
+    sha256: 530e2c2c0edb7288f1b6fb98e09e818cc8e5fffc142b7e401989680dd6e4552e
   .harness/docs/PRODUCT_ACCEPTANCE.md:
     policy: managed-overwrite
-    sha256: eacbf58087bf87140d4c853968e45cef8e686ea1bd31d30e5e6a7fd3fc3e02af
+    sha256: 34796acce07c3f24198c071cfe27dc1b3f4fc30978931f8b673a7df4066601b9
   .harness/docs/PRODUCT_SENSE.md:
     policy: managed-overwrite
-    sha256: d19e3699c9200493b72060cbe5b66b75ce20cead52e7b58023ca3905903404b7
+    sha256: b1437ef06bc9a0f76c1c78efeed377c7ce310aa3da84eea7908b820cb89cc07f
   .harness/docs/QUALITY_SCORE.md:
     policy: managed-overwrite
-    sha256: 6c6678446afd4bc5ff7fb0bd30676c947288627192992f5412b4f88c5256be49
+    sha256: 69e31f10ed5e8af1624cb3228930c5cce72b668e5c488b5a2a8805109e4a4db6
   .harness/docs/RELEASE.md:
     policy: managed-overwrite
-    sha256: 12170c2ddb3a23f732c9bd94fe2329d62d1bec1af4659b81437cb7e47c7321e4
+    sha256: 3dec919cc561cfad106d3fcbbddb8e08fe81c71ec2ccf244f7751ce6705eb3a2
   .harness/docs/SECRETS.md:
     policy: managed-overwrite
     sha256: f42c530bc0aeb8bacd3fc5b802baba484fabb54c1db18af72171d32f4fd573ff
   .harness/docs/SPRINT.md:
     policy: managed-overwrite
-    sha256: 57723ec55fae3f79cf39d02459a345813efdc0075ac6e59a83901acd1f0849fc
+    sha256: fba097186e19917746d3ea2830104488c3a3bee7f47fd505ace1c7fcedc5e54e
   .harness/docs/TECH_BACKEND.md:
     policy: managed-overwrite
-    sha256: c14f7892365de8ef28e5025f40e32e490770ad4e7200de71f7da2b6bb64fba3a
+    sha256: c0c95afab3b7f410abb283fcbea20e3e16d2347f69c9489be7e986d60f039df5
   .harness/docs/TECH_FRONTEND.md:
     policy: managed-overwrite
-    sha256: 88242849464b0ab4ae8759088d28993104da6eb37c2057708e3b7fff772d4cde
+    sha256: 135efc48c3d07ca905b79436f149fc11f4b8f5d16c8838968b02305db6c223b0
   .harness/docs/TECH_LIBRARY.md:
     policy: managed-overwrite
-    sha256: dcf6bf9181c033bea342cb8afc4c0f6573cef3ad342c4696baf43dea00585645
+    sha256: 9e4f5f8ccf715048f53956ab78cdd403356f499e47e814987350ca8d29874d31
   .harness/docs/TEST_CASES.md:
     policy: managed-overwrite
     sha256: 002003bb51657e0aeba96f8449b02a4a2aadc845580011dbbaeeb18fa8b1b701
   .harness/docs/UI_DESIGN_SYSTEM.md:
     policy: managed-overwrite
-    sha256: cdfd6092a41a13f7e7da22116e2e1ccb1c4967e7ae7409e6c831742bc7b6de76
+    sha256: 821f395fcf547bd3fb3214e175d409c53588bf5fe6a75dc7eb591678a7637a72
   .harness/eslint/eslint.config.mjs:
     policy: managed-overwrite
-    sha256: 22ebcf52b74ab1646d5a18a9ea2b8b2e8d9eeb5800ad0c473ed3fb690ac6a7f3
+    sha256: ee0ce657a7da043151c337ecf371da0a6f319b1a710adfc29fbae49991ee7e3f
   .harness/eslint/harness-plugin.mjs:
     policy: managed-overwrite
-    sha256: 1e9c0da5abde6176086aa78ff4b2d0c8f7a1dfcd4add82aa1f440601734131cb
+    sha256: 5e6a9f6e9959f32a5ddd7737bb5f66b76c2be64c63dfd9411259dec233959497
   .harness/framework/harness.defaults.yml:
     policy: managed-overwrite
-    sha256: 0310ed0a491b991a94f9bcee211cb286e0a42ac917e3547cb8057b255e7709bf
+    sha256: 544483d9e10f45069801ed7f8deed1b85948a06114b9e05c3730d1858ff2f340
   .harness/framework/mode-assets.yml:
     policy: managed-overwrite
     sha256: 41f9af07d7e9c216d16c04cbf3f04a8eb98a7ee3642d063dd9447024d81eef5e
@@ -173,10 +173,10 @@ assets:
     sha256: b7e9c4c038ff3557437ec391e6423d0c1a05360d038386e39b8c9abd7dc84367
   .harness/rules/task-rules.yml:
     policy: managed-overwrite
-    sha256: e76d9c187db7910183fa5e2af540e1a9d32c26fdc67ce1b042ff2ea7285f8ac8
+    sha256: 7f87f4fec176f60a853b990fd9ed54c1075f8dd73e804d339b3af869d1bf6387
   .harness/rules/walkthrough-checks.yml:
     policy: managed-overwrite
-    sha256: 2cd838a84e166039700ff8a205f2007e43f61b7bedeb738fed90b15258d3f6b9
+    sha256: 98508cc3d464c2a49580f2c5a8a26ec3cfecab99fe3277995e1381178af7b032
   .harness/runtime/.playwright-ready:
     policy: managed-overwrite
     sha256: 2f9d43314ecd7c29f4b69204864598def0891803336eac89ad0350fc07fbbec3
@@ -216,27 +216,48 @@ assets:
   .harness/runtime/src/mai_harness/runtime/application/dependency_session.py:
     policy: managed-overwrite
     sha256: 196da134cf0067f0c18e9f8a53e3aac7dfa8f51a003043b64f884eb39c37b48c
+  .harness/runtime/src/mai_harness/runtime/application/deployment_candidate.py:
+    policy: managed-overwrite
+    sha256: 3399a79822d66d5aed3b657d1b99719c662edcd0b57b04a0266ad582f007832b
+  .harness/runtime/src/mai_harness/runtime/application/document_registry_migration.py:
+    policy: managed-overwrite
+    sha256: 04f31d9b34fec897b6111f1a4ee308f361d4e8f3a927b54327d0ffe81efc6af8
+  .harness/runtime/src/mai_harness/runtime/application/integration_contract.py:
+    policy: managed-overwrite
+    sha256: 7cd447b1d3cf50450172e6bbe0b8375282042ab9a2ba56facf43067272f5a6d5
+  .harness/runtime/src/mai_harness/runtime/application/migration_progress.py:
+    policy: managed-overwrite
+    sha256: e65b01a830d2ec64354fdc29fa896ff93ee7e45a2f8ab691e7b6256739ddad12
   .harness/runtime/src/mai_harness/runtime/application/performance_evidence.py:
     policy: managed-overwrite
     sha256: 1a8bfeaaa250a372f092b43dbdc9727cbeae3565785ea54d88b7285dbb1fb952
+  .harness/runtime/src/mai_harness/runtime/application/promotion_preflight.py:
+    policy: managed-overwrite
+    sha256: f636857c1179b84087dea61a11ca7c209d14fcef8a35c5e24e6b826206740adb
+  .harness/runtime/src/mai_harness/runtime/application/release_authorization.py:
+    policy: managed-overwrite
+    sha256: 7c5611a5821f99ca06ba6b685ef0e0dfc723af32922691847c40942544ab0398
   .harness/runtime/src/mai_harness/runtime/application/required_secrets.py:
     policy: managed-overwrite
     sha256: 6985d0150b6d5f7cba4731ec9f2c6355ddf9296cf0c4b5e3d00f9e1246f132ff
+  .harness/runtime/src/mai_harness/runtime/application/requirements.py:
+    policy: managed-overwrite
+    sha256: 3e4f5b2d090a49b652e03c8069befe7ce3c034579b783654b9704c2ffb9d0548
   .harness/runtime/src/mai_harness/runtime/application/sprint_context.py:
     policy: managed-overwrite
-    sha256: 98200706ae98849f94badfda6b183d0fe136ad122d75fa0b38c36b72847b17da
+    sha256: 59320d8beda53e1e4d864c72b8bebf1d2e75c2e6b2d619b907658d674fe5875f
   .harness/runtime/src/mai_harness/runtime/application/task_evidence.py:
     policy: managed-overwrite
-    sha256: b7e0c2700ed931e467f5277da7da28ce9c0142bde2a1c235cbc814f2a8625462
+    sha256: 2921c8b834493a31ff88ddb3cb8a6d728016c564ee65ee22f788a81becfac33a
   .harness/runtime/src/mai_harness/runtime/application/worktree_service.py:
     policy: managed-overwrite
-    sha256: f42432b2a89daa0d0b0b61552bc26f51934388766fc5dc16d4ba983cba584eae
+    sha256: d4657f73ed28e0be784447bdda77256a2e6178ca371c53c41146a3dfbfd2d5a7
   .harness/runtime/src/mai_harness/runtime/commands/__init__.py:
     policy: managed-overwrite
     sha256: 09c8ef65c6eb5c12a1137d2f0215e11cc0a964ee5d1405ab5cf02789f2695782
   .harness/runtime/src/mai_harness/runtime/commands/acceptance_record.py:
     policy: managed-overwrite
-    sha256: eb0b539db51ff2ea82c1260b1c9a6221d3657da896b5f5efcf18406a5e0f3e33
+    sha256: 3e501b021233ab65538c65d0049c796e29aed68b0da986a7c4a9a861323dceab
   .harness/runtime/src/mai_harness/runtime/commands/action.py:
     policy: managed-overwrite
     sha256: 5ba45b67a56cc43ac59e1e676662a99dba5c350c9a5285a208bc2e8b39d52f7d
@@ -257,7 +278,7 @@ assets:
     sha256: ed5c4a10eefaf6d59a4befdca5dad2f17b8eb280429fee32da57f093fbfc19f9
   .harness/runtime/src/mai_harness/runtime/commands/build_image.py:
     policy: managed-overwrite
-    sha256: b314782ab49b2bddc7a5972a5c2ec928e6856428d7665465abc92ed6391d8ce9
+    sha256: df9e6e15b32e9b33fb882f643448a8f7dc3d54f934d4834cc7be01afa4c3c70e
   .harness/runtime/src/mai_harness/runtime/commands/check_contract_strength.py:
     policy: managed-overwrite
     sha256: 76c03fe762d7f8d78bab35decd8e489273ec016ea2586ee3d4178b6b5988687e
@@ -275,7 +296,7 @@ assets:
     sha256: 390f43bf2ba73bfe6162f1fdf29cc7d0c20f92f97c3e1dc4b8582b171c45872f
   .harness/runtime/src/mai_harness/runtime/commands/control.py:
     policy: managed-overwrite
-    sha256: 73aea2a1714e0631886b334a64401183ffee61ae18929e851c58e8a7c7ada58c
+    sha256: e47a62f54df2b5929d6c2835f089a88dcb1ef9163e2185fe734e458c94ea36dd
   .harness/runtime/src/mai_harness/runtime/commands/delivery.py:
     policy: managed-overwrite
     sha256: 91ac94563b24bb32090e5dc471fabfb6d1e8f3a046edb27ad9ea2b00075b2907
@@ -284,16 +305,19 @@ assets:
     sha256: e8d750af0ec95fb97d33445da856d93e7216fcbc772d51fbe23652712b8bdceb
   .harness/runtime/src/mai_harness/runtime/commands/deploy.py:
     policy: managed-overwrite
-    sha256: 468eb6f848164b9dd3f0a7fd154f3e912d5e1dd0dca99093bfd933bf04ea3820
+    sha256: fe2380691efde0e1b1110e51368094eaef1827bfd46c2dbb3ddadd5eba4cdfab
   .harness/runtime/src/mai_harness/runtime/commands/doc_garden.py:
     policy: managed-overwrite
     sha256: 6b961c6585d0cca97ea4d61d4c7c6091cee2bd3ee864c828c16519affca409ea
   .harness/runtime/src/mai_harness/runtime/commands/doc_lint.py:
     policy: managed-overwrite
-    sha256: 6b137b72026490498c3d6e9c9b5cdeff4171171e2f4b6b357beb03618a0ed67c
+    sha256: 7cb9ac9ca1ab3ac7006182889193e87ef2c157f5816e8220b9a1a7bb641c9e94
+  .harness/runtime/src/mai_harness/runtime/commands/document_registry_migrate.py:
+    policy: managed-overwrite
+    sha256: d350bfe1b2d77c5078db7b17b269dc05c794a3f756938ccec2faaa60f9506a19
   .harness/runtime/src/mai_harness/runtime/commands/env_check.py:
     policy: managed-overwrite
-    sha256: 1c035d0a42bdc74adaec53323aa402e5c8c635e4eecad55286e12f93f62ab4a8
+    sha256: c06fe48c166f266c305a07f196b0d46f88162accb6fcde46d07925c889067a94
   .harness/runtime/src/mai_harness/runtime/commands/framework_drift_check.py:
     policy: managed-overwrite
     sha256: 5c5a5997910a4260970fa56d99e7c8eb657dbb36e0eb35c9e6ad2695a7a4c7df
@@ -305,10 +329,16 @@ assets:
     sha256: 56ed6870857bf849f0ce02326d764fb6d4d2b0745036efff4e005978ddd874d3
   .harness/runtime/src/mai_harness/runtime/commands/hotfix.py:
     policy: managed-overwrite
-    sha256: bb9bb241362e950e0dc9113852f8cdb7ba7cd7b37f9de23fc9f875d89f59c786
+    sha256: b55482f2f022fd6b591449674acc7102688d55028cb0a32b1648769524f7c3fc
   .harness/runtime/src/mai_harness/runtime/commands/image_promote.py:
     policy: managed-overwrite
     sha256: e4f22210c8d680c0ff42f8fa327bacd9720f9eea168f378c76142a1035433644
+  .harness/runtime/src/mai_harness/runtime/commands/integration_exec.py:
+    policy: managed-overwrite
+    sha256: 4a5cb80de992be9e3570a16f97e64a521eb5a2cddd4ec693dec9b9a1d073e3bf
+  .harness/runtime/src/mai_harness/runtime/commands/integration_guard.py:
+    policy: managed-overwrite
+    sha256: 63dd2814f422f900cec3a9bc4310f97c2a81c5d2b2ea4fa9febdb701be2a2752
   .harness/runtime/src/mai_harness/runtime/commands/kubernetes.py:
     policy: managed-overwrite
     sha256: f474a255705b996a290b80bada32107f5a654d7f5f32e24a1f6c1bf22b1a0f9b
@@ -323,37 +353,52 @@ assets:
     sha256: c65e0146b2ba13ccaa2a3c2ff22b5978b80de89ef0a941aac476f65edf15acf0
   .harness/runtime/src/mai_harness/runtime/commands/migration_check.py:
     policy: managed-overwrite
-    sha256: 7c490f5a95fb4ac1e8f6118ec113587129a674cae41a04a1e102cf07b0346bf1
+    sha256: 10d9ea49d015e2d60222c197cfd193886ba7795d44cc4cfbe121e1103bc43cba
+  .harness/runtime/src/mai_harness/runtime/commands/migration_progress.py:
+    policy: managed-overwrite
+    sha256: 257caabccea0f9848f8f8862bb41ee263b7daa55073d3016cb8b503c898a4867
   .harness/runtime/src/mai_harness/runtime/commands/mode_check.py:
     policy: managed-overwrite
     sha256: 46c4f9285b10619ed646453d5f84d6d26f60f190490863fa5cc00eceaf9d8f6d
   .harness/runtime/src/mai_harness/runtime/commands/observability_check.py:
     policy: managed-overwrite
-    sha256: 4b5450d2c358e95e885021161880cf7aedb5f2e4a0aad97c658c617081715510
+    sha256: 09ec40726a0129ab388e03de02b407a5ad5f899ce0f2671b979820c7c56bc654
   .harness/runtime/src/mai_harness/runtime/commands/pipeline.py:
     policy: managed-overwrite
-    sha256: de5af8ba6fbc3347179bbd8020e1e594adedc0f78c42f46d0d35b103aa4c17ed
+    sha256: fecf60c9c2deff5f39a38e7567916b66256595afaad41c233654d10d08757295
   .harness/runtime/src/mai_harness/runtime/commands/pr_adapter.py:
     policy: managed-overwrite
-    sha256: f506ffc3b74d9f681df592753c6d6e117db03e1e6420b1bb0d5885d49dc46ec8
+    sha256: 43d8b0c49b494b8ad8ca6571ff1e44c1da2fa8b5a7f8a245ef4349e6b88672db
   .harness/runtime/src/mai_harness/runtime/commands/promote.py:
     policy: managed-overwrite
     sha256: 29e50b275b73ef3cbaaadae2e4b070e3e3852fb17ad58859fec2ce05adfbdac7
   .harness/runtime/src/mai_harness/runtime/commands/promote_prep.py:
     policy: managed-overwrite
-    sha256: 50559af205e961ac9b48175846f5cb6ab2749aad3e4b90502c8dc34b029edb1e
+    sha256: 803a3de3cdec1d92c13c084027eacd438a621d3587dc0f46cf4bcea63073d7c1
+  .harness/runtime/src/mai_harness/runtime/commands/promote_test_guard.py:
+    policy: managed-overwrite
+    sha256: ba6ad330abb0886e274d7ad9e8b5f62aa34412fbd4c17cb6afd4c66da812d613
+  .harness/runtime/src/mai_harness/runtime/commands/promote_test_receipt.py:
+    policy: managed-overwrite
+    sha256: 1fe95e1170132c6c77314e3d89e5cba28b839fa9f9978d937741ca7ed9499de5
   .harness/runtime/src/mai_harness/runtime/commands/python_architecture_lint.py:
     policy: managed-overwrite
-    sha256: df672d4eef50b8092cd8a5770ca6cf98512fbec1b6c8c6a1173d28320e36d322
+    sha256: fe4e779c3d4a79120f35466beb0f7db405a70bb6440fb3ed2ceafb9deddb14c7
   .harness/runtime/src/mai_harness/runtime/commands/quality_score.py:
     policy: managed-overwrite
-    sha256: f1050fc4315aca8c0665cfee5cad41cc9584e03b418c4f1332328da4470f7145
+    sha256: 191ee1cf6de0ff867cd3aefa006d893b2d176df68b4555868c3f205c783aef40
   .harness/runtime/src/mai_harness/runtime/commands/registry.py:
     policy: managed-overwrite
-    sha256: a12c9a3853d7a28376300b5c598bf1a3e41070fd10d17dbefc6c804f936f80e0
+    sha256: deaa577027b90a71023ad07420a93ed25bc403f668e8838ee1736e1eb4d9d1c3
   .harness/runtime/src/mai_harness/runtime/commands/release.py:
     policy: managed-overwrite
-    sha256: 530464202acfdb43fb3e74b93a2674b1b760b5887a96c7099418482927bfb8ac
+    sha256: 992df2f421e6dfae6dfc29fb2ac9f36e82e82e65defdf246eed2c4065a09ee17
+  .harness/runtime/src/mai_harness/runtime/commands/release_authorization.py:
+    policy: managed-overwrite
+    sha256: 3c8436e71cd5b61214a5bb043d6f3af2da69c02bf323316caf240e899f4b41e6
+  .harness/runtime/src/mai_harness/runtime/commands/requirements.py:
+    policy: managed-overwrite
+    sha256: 5c6445f8bb0db1598985d0436c64976a30cc4bef924b1d1b2c0192d1e48f1b94
   .harness/runtime/src/mai_harness/runtime/commands/run_project_command.py:
     policy: managed-overwrite
     sha256: f95afe954ecddc86212d54795ce5933d3f106a0e35dc5e214500edd363a07ee3
@@ -365,31 +410,34 @@ assets:
     sha256: f7cf60e6b83012cf0fd38a94e24eeeabf0d2b4d760097d0746be5b27aa16b659
   .harness/runtime/src/mai_harness/runtime/commands/secrets_scan.py:
     policy: managed-overwrite
-    sha256: f16b5530cc1d9ca8e54408633bd70ef679cb2baa629a48ab0a8836cedb34fe98
+    sha256: 257020d253987b788d2c768e1e37a42cf53c21c7b4587564aff6e7a7a677358f
   .harness/runtime/src/mai_harness/runtime/commands/secrets_sync_check.py:
     policy: managed-overwrite
     sha256: bb2a1dc9bf078e4d588cbb29f4148b739d689e6e860e35b5b2a21cf8fb095095
   .harness/runtime/src/mai_harness/runtime/commands/sprint.py:
     policy: managed-overwrite
-    sha256: 08aa35c848658e0f4d4378ddab744f15017b9c17c852b36fa482736b6c1c8c66
+    sha256: 3178c93660610d140b180ceebe2aea53bcd11384ee35a662f373f0fd4b583a4a
   .harness/runtime/src/mai_harness/runtime/commands/sprint_gate.py:
     policy: managed-overwrite
-    sha256: ecd80bb1bce85f861497198a461038a460e67466069a00680c006b15b97e4686
+    sha256: d66a789b27421d40dbdebe15d9c9d25dd90014146dc8e9e976fe5776f9ae1fa5
   .harness/runtime/src/mai_harness/runtime/commands/task_action.py:
     policy: managed-overwrite
-    sha256: 784321df4336818078be369e071a668154c58427239b0b68d74a45dadd516b18
+    sha256: d5b8dfe546a52c11d53d534db3f409ec1c48c87ea8ee339ddc3a8db57b71cd05
   .harness/runtime/src/mai_harness/runtime/commands/task_commit.py:
     policy: managed-overwrite
     sha256: 21c4d4bb7f70aa1b9c35d9ed95edcca53b3c56416132aec0eefb7327b78a4d42
   .harness/runtime/src/mai_harness/runtime/commands/task_context.py:
     policy: managed-overwrite
-    sha256: 454ead4f6d7119818ca0dc77ea8a99b3dbb9885100383c3c88c61d40bde4dc8c
+    sha256: de075cc606e9862312460ad53d0c6bdffa4e66b3b1916b4d0e1a21561983a036
+  .harness/runtime/src/mai_harness/runtime/commands/task_reopen.py:
+    policy: managed-overwrite
+    sha256: 81240b0771623695e53f28fe8799622f16b8cf9f9eaaed09dfab922ceeaaa3b8
   .harness/runtime/src/mai_harness/runtime/commands/task_review.py:
     policy: managed-overwrite
     sha256: b9ac30bbf6a50042bf955badf11ec17e7bc0be2077dbad19bc5c63481cccb173
   .harness/runtime/src/mai_harness/runtime/commands/task_rollback.py:
     policy: managed-overwrite
-    sha256: 8ae34650dd334619c71ff69ef0a08f3acb97ffcd74b6d3431193921ae919bd85
+    sha256: 34efc35a5bb3b225be53648ac973da93b9d46e9f21f4ec37fb96d42054c440d0
   .harness/runtime/src/mai_harness/runtime/commands/test_case_backfill.py:
     policy: managed-overwrite
     sha256: 0f41b097640ef900e7d29842f2e7f1791bbd764d3caf4094db30ce23f2caf632
@@ -401,37 +449,46 @@ assets:
     sha256: 5c8a67b420149537360b946236bc510f251fa7a2db59d978baed6c9ffaa0a314
   .harness/runtime/src/mai_harness/runtime/commands/ui_audit.py:
     policy: managed-overwrite
-    sha256: 1958404aaea66a6ce89058511fb2121abdf8680a3b7be8c8bd48c091371bf125
+    sha256: cce9bdfcc4aa3b687c11ef73034099d8bb7c863d75dcdfd607de737fea7a0b7b
   .harness/runtime/src/mai_harness/runtime/commands/ui_tokens_lint.py:
     policy: managed-overwrite
     sha256: 168ed2823a30d7e94e0644864cbbca3e547a71fa82da0dda60dd13bbb9e01c44
   .harness/runtime/src/mai_harness/runtime/commands/validate_task_rules.py:
     policy: managed-overwrite
-    sha256: 68d4533a5db327d2f9c5d24e91e20b95d86dc86801ee93257cf7f8bc11428ad1
+    sha256: 69b251c1140703648325d21a29024fe2f06980651721151b61d978f70ebcdcbd
   .harness/runtime/src/mai_harness/runtime/commands/verify.py:
     policy: managed-overwrite
-    sha256: ffe178653a99becb6c095d34446823357ef38d2261913b9a504a859a308d5e44
+    sha256: 4811fb840236b6cb49afcb5b6ef911bbcd1db8cc7665de543891b9946dee6fe2
   .harness/runtime/src/mai_harness/runtime/commands/worktree.py:
     policy: managed-overwrite
-    sha256: 07726922b30019c943eca804c61ff638b648e6902b9e9629b237cc657e5e8b02
+    sha256: 7918b86d3d762f1ec9545072f76b0b98159098a478e615bab70c58c770dacf70
   .harness/runtime/src/mai_harness/runtime/domain/__init__.py:
     policy: managed-overwrite
     sha256: 7839b66f852687ae197093fdba416cade5f3ff2d1b7ca2729d5dde2700c44a6a
   .harness/runtime/src/mai_harness/runtime/domain/actions.py:
     policy: managed-overwrite
-    sha256: 289a35cc08c0c51001250d41674c568d0b6a4ac5aadea0b4d69fe596217da255
+    sha256: 9ea674ce5822e70418ad6ab5880f816a2b8d6f0203ee4274c751298a7457f1bc
   .harness/runtime/src/mai_harness/runtime/domain/dependency_graph.py:
     policy: managed-overwrite
     sha256: 589547915fb2b0f864a2a4d7c7a598af3e83a6a167e39953452f840c7aa08207
+  .harness/runtime/src/mai_harness/runtime/domain/document_registry.py:
+    policy: managed-overwrite
+    sha256: 5fc84027c9994320f3e09c84918e7ec2cb3f6c54dd1959ae44339be1aec40c92
+  .harness/runtime/src/mai_harness/runtime/domain/execution_evidence.py:
+    policy: managed-overwrite
+    sha256: 2e5d72f13e318e8da82c17c06681369699cccd9bcbddca51b6fb85147af53613
   .harness/runtime/src/mai_harness/runtime/domain/modes.py:
     policy: managed-overwrite
     sha256: 64713bfe5efb69eb2ed214870153b832654b56dc0e60075da6e52d6cef4d5e05
   .harness/runtime/src/mai_harness/runtime/domain/pipeline_plan.py:
     policy: managed-overwrite
-    sha256: ce2d85c5a5a263641a1cf8e0d4ece83bb2659be79dd2c8b65450b706f5098c51
+    sha256: d002189c7b2fc351b416d0f61ff8590608c63c7c377b413c37ddf1c91dcccadf
+  .harness/runtime/src/mai_harness/runtime/domain/scope_routing.py:
+    policy: managed-overwrite
+    sha256: cfd4af6b20a6ae16988a271c3bdfc099f486f2508de2fc02f1218e5376c1a8cf
   .harness/runtime/src/mai_harness/runtime/domain/sprint_context.py:
     policy: managed-overwrite
-    sha256: e7dc8b508e0403c0ea048b9be6bcd17d18e1f0ab4574ce640e92ac921cdb59b1
+    sha256: d587fe2fa7563b2f68dfd0b8fdb3c863d4734a19f5e9455ba786c3d4e4294222
   .harness/runtime/src/mai_harness/runtime/domain/task_protocol.py:
     policy: managed-overwrite
     sha256: 9bd3bcad1b436781bd1c147f27b07a4ef1583739072dc2e8679b157cd193d9a0
@@ -440,13 +497,13 @@ assets:
     sha256: cabf3f9e12eef193375b1c6af7c3501610c3763992ef1d8057363ac1913fd57e
   .harness/runtime/src/mai_harness/runtime/infrastructure/adapters.py:
     policy: managed-overwrite
-    sha256: 2479d02a7070f1a17269b29c7720d79f7d14253445206126769aabd2cc834cbb
+    sha256: 72a1fa95f391fdc82185682da06ef303194bd4aa8b4ef3fd495203a28d764b1e
   .harness/runtime/src/mai_harness/runtime/infrastructure/core/__init__.py:
     policy: managed-overwrite
     sha256: e072f2aec05f6fce922d9c207c21540897a3c072b9b498f4e0733397ac8c0ecb
   .harness/runtime/src/mai_harness/runtime/infrastructure/core/command.py:
     policy: managed-overwrite
-    sha256: 8ebf39b716808b1cd4b031f45580be4939dc80eef1e7527b8b61f64717604045
+    sha256: fc0da932d05f427e758b5d1ba202bfb1523de312b64dca954203745313653359
   .harness/runtime/src/mai_harness/runtime/infrastructure/core/context.py:
     policy: managed-overwrite
     sha256: 6dcf627cf2967a61fc99c6647c3c408b5956d601f3d0aee97deb78c4b18964c2
@@ -458,13 +515,13 @@ assets:
     sha256: 88f235d32ad48da5297793e687db990ae0b79acf9b5cf5e611e04837704e4e41
   .harness/runtime/src/mai_harness/runtime/infrastructure/core/state_store.py:
     policy: managed-overwrite
-    sha256: e1425b054c62ee1ff8d6d45c641914f6f5fd63a7b1dd2d57c3b3d4c3674f3caf
+    sha256: 87f03c1f101acf608c55ee6b4bfc66e2cc621d7793d927582282eb8788062cd4
   .harness/runtime/src/mai_harness/runtime/infrastructure/deploy_config.py:
     policy: managed-overwrite
-    sha256: bb98f79e2e161b559ff306ed6a0d1e28c46815125bf59cad65049175141330a6
+    sha256: 11b97225dd80980b3a108533e4bc1025b8e545f0f0a20e9f8828f34fdda6798e
   .harness/runtime/src/mai_harness/runtime/infrastructure/harness_config.py:
     policy: managed-overwrite
-    sha256: f137b0942d81f97b0ed49bfbe340d837f060b9607c201d8ea5cc298e8f61ee1c
+    sha256: b895111910fd2345b84fe5a4860f0cc445c0f79515a88e8ad5836dbe6759896c
   .harness/runtime/src/mai_harness/runtime/infrastructure/local_runtime_env.py:
     policy: managed-overwrite
     sha256: 28a2ee08694e44f02d76346f169aa3bf7b6e50ad34ad1cf4db862e2effb82cc9
@@ -488,13 +545,13 @@ assets:
     sha256: e71de83ddd1b01ef962270d4e595afa74d0abe6a4f9c8b57df4576615847af44
   .harness/runtime/src/mai_harness/runtime/infrastructure/ui_contracts.py:
     policy: managed-overwrite
-    sha256: 2265e13c63f0b5ecc54dd7ad6a1791a8b880615ccabba47a38156ae76cd3a17c
+    sha256: ae2cf2f81ce4a21ab3ba0fb66857edb41f6b8edddebbfd95c37f7a3a47f9351c
   .harness/runtime/src/mai_harness/runtime/infrastructure/utils.py:
     policy: managed-overwrite
-    sha256: e506d86f60c59b52ffdee57cced646655ede6c25f556891398f221469e49e00e
+    sha256: 09c1dceee1faf8594347f93fe81e1629643dac7582dd2834e07a5fbe34b2424f
   .harness/runtime/uv.lock:
     policy: managed-overwrite
-    sha256: 96a5be75ec7eb96d0adf3b1444bb49d635beae3975d9a5e108a1b1d84bfbe37e
+    sha256: 3d496776c3df455fab2c9333aa8f0ab731ff080416e6de4db9efcb24f59253fd
   .harness/schemas/assignment-response.schema.json:
     policy: managed-overwrite
     sha256: 36e0a710c905f5de75fec1546ce2cc45b06b8c4f802343068b5175c8a37f7701
@@ -527,25 +584,25 @@ assets:
     sha256: 270575ebcefac9008d4410b2f07f20c20398e761181d5872243519c0d4015822
   .harness/state/.gitignore:
     policy: managed-overwrite
-    sha256: 299c1badb8d79848826d99eb198f818b3d34a70c452470f9f8fd1a379fdba6c9
+    sha256: a6a857a3b48ce85feef89bcc71aeb4e4ee2af747cdb261a24d13332a164e5d87
   .harness/state/README.md:
     policy: managed-overwrite
-    sha256: 86762be0e2bdd83602c3aa65783499957b9afc618aaae6d15533a408ff01bd49
+    sha256: dea984aa5b3e9e724abcc2de673f3d1b7356f2ff9f539579622677af05688881
   .harness/templates/migration/README.md:
     policy: managed-overwrite
-    sha256: c976aab625775ad7167da04090c95594cf75e6c29596422ec464fe93b9eaa095
+    sha256: 1c7e09dabbc3dc11a99470921a98c54ae60bd528b69fa2f491cb39ed70467999
   .harness/templates/migration/down.sql.tpl:
     policy: managed-overwrite
     sha256: 327f5be4e06c892ca4e928461079f7df66cd9faaad6ba07fe7503fccb1388ba5
   .harness/templates/migration/manifest.yml.tpl:
     policy: managed-overwrite
-    sha256: 85d8a1a9de260f942756b70c2862c69fa2d09ea50ff95b334d2a1d2d8c304a6b
+    sha256: ad6853c027b39e8f0677b2475ad5a834b717f88b708a4bb6e615e3abe534e959
   .harness/templates/migration/up.sql.tpl:
     policy: managed-overwrite
     sha256: ee0ee000d775769095b61ee5eefbc9408cc5b41208e2fb4597bac700aa981b35
   .harness/templates/observability/README.md:
     policy: managed-overwrite
-    sha256: a27479bbba28c02f48fa51455d0fe0ed8025199243fba738a19e4a88291a87f6
+    sha256: bb4de2e812155c44ef49a2e312a2e2df41172113bb2e315bf571727c91165e5a
   .harness/templates/observability/logql/errors-by-service.logql:
     policy: managed-overwrite
     sha256: 69fb3e903e322487a497c67faf6f480e1b7727b1ef136769daedab6545ee2834
@@ -572,7 +629,7 @@ assets:
     sha256: 79f48c2d63c1bb32d8b1570bbe3a245dd9dcee6f325b190a344670887dbdf6c7
   .harness/templates/ui/prototype-base.html:
     policy: managed-overwrite
-    sha256: a6ab504e7393692ae00ee29a54aed95c7cd895ec1dec7941dfe5ffc5f6c50d93
+    sha256: 0ab31c18ca4186be1f88c45bde1d7b87c31d63cfd7518f49b9283066bee4caee
   .harness/templates/ui/tokens.css:
     policy: managed-overwrite
     sha256: 94d9c98eff55f1bea7406fe45aa0d6ae3dd9bec32368a7b5ed4126a798b86617
@@ -581,7 +638,7 @@ assets:
     sha256: 5caf6d6bfbc929d4a5c95a7e49c258d34a8d3b600cbfcfdcdac370b44c22605c
   tests/e2e/helpers/playwright-runtime.ts:
     policy: managed-overwrite
-    sha256: f2e6b6d6fca49ca88536bad7c28200cee1bf74137f073be4cabed1742ffe3f6b
+    sha256: ea51299aa645f52fa9b4d47f7f08ce9a4c3bbe55a0e1f5a79cdd6bdb6bad7585
 framework_version: 0.3.0
 mode: managed
 schema_version: 1

@@ -1,44 +1,45 @@
 #!/usr/bin/env python3
 import argparse
-import shutil
 from pathlib import Path
 
+from mai_harness.runtime.infrastructure.harness_config import load_harness_config
 from mai_harness.runtime.infrastructure.utils import ok
 
-REQUIRED = {
-    "observability/dashboards": "JSON dashboard 导出",
-    "observability/alerts": "PromQL 告警规则",
-    "observability/queries": "PromQL / LogQL 查询模板",
-    "observability/runbooks": "On-call runbook",
+ASSETS = {
+    "dashboards": ("observability/dashboards", {".json"}, "JSON dashboard 导出"),
+    "alerts": ("observability/alerts", {".yml", ".yaml", ".json"}, "项目 SLO 派生的告警规则"),
+    "queries": ("observability/queries", {".promql", ".logql"}, "PromQL / LogQL 查询"),
+    "runbooks": ("observability/runbooks", {".md"}, "On-call runbook"),
 }
 
 
-def validate() -> None:
+def required_assets() -> list[str]:
+    return list(load_harness_config()["observability"]["required_assets"])
+
+
+def validate(selected: list[str] | None = None) -> None:
+    selected = required_assets() if selected is None else selected
     errors = [
-        f"{directory}: 至少 1 个文件（{hint}）"
-        for directory, hint in REQUIRED.items()
-        if not any(path for path in Path(directory).glob("*") if not path.name.startswith("."))
+        f"{directory}: 至少 1 个匹配文件（{hint}）"
+        for name in selected
+        for directory, suffixes, hint in [ASSETS[name]]
+        if not any(
+            path for path in Path(directory).glob("*") if not path.name.startswith(".") and path.suffix in suffixes
+        )
     ]
     if errors:
         raise SystemExit("observability 校验失败：\n  - " + "\n  - ".join(errors))
     ok("observability 校验通过")
 
 
-def scaffold() -> None:
-    for directory in REQUIRED:
+def scaffold(selected: list[str] | None = None) -> None:
+    selected = required_assets() if selected is None else selected
+    for name in selected:
+        directory = ASSETS[name][0]
         Path(directory).mkdir(parents=True, exist_ok=True)
-    for kind in ("promql", "logql"):
-        for source in Path("templates/observability", kind).glob("*"):
-            target = Path("observability/queries", source.name)
-            if not target.exists():
-                shutil.copy2(source, target)
-    defaults = {
-        "observability/alerts/error-rate.yml": "expr: error_rate_5xx > 0.01\nfor: 5m\nseverity: warning\n",
-        "observability/runbooks/error-rate.md": "# Error rate runbook\n\n1. 检查日志和指标\n2. 执行 `uv run --project .harness/runtime harness deploy rollback --env <env>`\n",
-        "observability/dashboards/.gitkeep": "# Export dashboards here\n",
-    }
-    for name, content in defaults.items():
-        Path(name).write_text(content, encoding="utf-8") if not Path(name).exists() else None
+        marker = Path(directory, ".gitkeep")
+        if not marker.exists():
+            marker.write_text("# Add project-owned observability evidence here.\n", encoding="utf-8")
     ok("observability 骨架已生成")
 
 

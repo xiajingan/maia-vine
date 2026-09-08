@@ -14,14 +14,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from mai_harness.runtime.application.action_executor import action_argv, execute_action
 from mai_harness.runtime.application.dependency_session import validate_session
+from mai_harness.runtime.application.deployment_candidate import validate_deployment_candidate
+from mai_harness.runtime.application.integration_contract import (
+    delivery_identity,
+    integration_contract,
+    validate_integration_contract,
+)
 from mai_harness.runtime.application.sprint_context import (
     validate_sprint_activation,
     validate_sprint_context,
 )
 from mai_harness.runtime.application.task_evidence import (
     activate_attempt,
+    current_attempt_state_path,
     ensure_attempt,
     record_phase,
     validate_attempt,
@@ -30,10 +39,19 @@ from mai_harness.runtime.application.task_evidence import (
 from mai_harness.runtime.commands.validate_task_rules import validate as validate_rules
 from mai_harness.runtime.domain.actions import resolve_action
 from mai_harness.runtime.domain.modes import PROJECT_TYPES
-from mai_harness.runtime.domain.sprint_context import header_field, table_rows
+from mai_harness.runtime.domain.sprint_context import (
+    header_field,
+    planning_contract_digest,
+    sprint_planning_contract,
+    sprint_structure_digest,
+    table_rows,
+    task_dependency_graph,
+    transitive_task_dependencies,
+    validate_sprint_outcome_evidence,
+)
 from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
-from mai_harness.runtime.infrastructure.harness_config import load_harness_config
+from mai_harness.runtime.infrastructure.harness_config import load_harness_config, resolve_delivery_ref
 from mai_harness.runtime.infrastructure.utils import load_yaml, try_run
 
 DONE = re.compile(r"^(done|完成|通过)$", re.I)
@@ -57,6 +75,147 @@ class GateResult:
 
     def check(self, condition: bool, success: str, failure: str) -> None:
         (self.passed if condition else self.blocked).append(success if condition else failure)
+
+
+def load_mapping_evidence(path: Path, result: GateResult, label: str) -> dict[str, Any]:
+    """Read untrusted YAML evidence and convert parse/shape failures into BLOCKED."""
+    try:
+        loaded = load_yaml(path)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        result.blocked.append(f"{label}无法读取: {path}: {exc}")
+        return {}
+    if not isinstance(loaded, dict):
+        result.blocked.append(f"{label}格式非法（顶层必须是对象）: {path}")
+        return {}
+    return loaded
+
+
+def validate_signoff_delivery_refs(
+    root: Path,
+    config: dict[str, Any],
+    commit: str,
+    result: GateResult,
+) -> None:
+    """Verify the approved commit reached the configured delivery targets."""
+
+    keys = ("development", "test") if config.get("walkthrough_env") == "test" else ("development",)
+    try:
+        resolved = [resolve_delivery_ref(config, key) for key in keys]
+    except ValueError as exc:
+        result.blocked.append(str(exc))
+        return
+    remote = resolved[0][0]
+    branches = [branch for _, branch, _ in resolved]
+    fetch = try_run(["git", "fetch", remote, *branches, "--quiet"], cwd=root)
+    result.check(fetch.ok, "目标分支引用已刷新", f"无法刷新远端目标分支引用: {remote}")
+    if not fetch.ok:
+        return
+    for _, _, ref in resolved:
+        contained = try_run(["git", "merge-base", "--is-ancestor", commit, ref], cwd=root)
+        result.check(contained.ok, f"signoff commit_sha 已抵达 {ref}", f"signoff commit_sha 未抵达 {ref}: {commit}")
+
+
+def validate_ui_design_approval(
+    root: Path,
+    sprint_file: Path,
+    task_rows: list[tuple[str, str, str]],
+    record: dict[str, Any],
+    result: GateResult,
+) -> None:
+    """Bind Boss UI approval to the current planning contract and reviewed design task."""
+    sprint_id = sprint_file.stem
+    result.check(record.get("sprint") == sprint_id, "UI 审批 Sprint 匹配", "UI 审批未绑定当前 Sprint")
+    result.check(
+        record.get("planning_contract_sha256") == planning_contract_digest(sprint_file),
+        "UI 审批规划摘要匹配",
+        "UI 审批未绑定当前 planning contract",
+    )
+    for approval_field in ("confirmed_by", "confirmed_at", "source"):
+        result.check(
+            bool(record.get(approval_field)),
+            f"UI 审批包含 {approval_field}",
+            f"UI 审批缺少 {approval_field}",
+        )
+    expected_reviews: list[dict[str, str]] = []
+    design_rows = [(task_id, status) for task_id, task_type, status in task_rows if task_type == "design"]
+    for task_id, status in design_rows:
+        if not task_id or not DONE.match(status):
+            result.blocked.append(f"UI L3 前 design 任务必须有 ID 且完成: {task_id or '缺失 ID'}")
+            continue
+        state_path = current_attempt_state_path(root, sprint_file, task_id)
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            result.blocked.append(f"UI L3 无法读取 design attempt: {state_path}: {exc}")
+            continue
+        review = state.get("review") if isinstance(state, dict) else None
+        context = state.get("context") if isinstance(state, dict) else None
+        if (
+            state.get("schema_version") != 3
+            or state.get("task_type") != "design"
+            or state.get("status") != "ready"
+            or not isinstance(review, dict)
+            or review.get("decision") != "pass"
+            or not isinstance(context, dict)
+            or context.get("sprint_structure_sha256") != sprint_structure_digest(sprint_file)
+        ):
+            result.blocked.append(f"UI L3 design Review 未通过当前 attempt: {task_id}")
+            continue
+        report_relative = Path(str(review.get("report", "")))
+        report_path = (root / report_relative).resolve()
+        try:
+            report_safe = (
+                not report_relative.is_absolute()
+                and ".." not in report_relative.parts
+                and report_path.is_relative_to(root.resolve())
+                and report_path.is_file()
+                and review.get("report_sha256") == hashlib.sha256(report_path.read_bytes()).hexdigest()
+            )
+        except OSError:
+            report_safe = False
+        artifacts = review.get("artifacts")
+        artifacts_safe = isinstance(artifacts, list) and bool(artifacts)
+        for item in artifacts or []:
+            if not isinstance(item, dict) or not {"path", "sha256"} <= set(item):
+                artifacts_safe = False
+                break
+            artifact_relative = Path(str(item["path"]))
+            artifact_path = (root / artifact_relative).resolve()
+            try:
+                if (
+                    artifact_relative.is_absolute()
+                    or ".." in artifact_relative.parts
+                    or not artifact_path.is_relative_to(root.resolve())
+                    or not artifact_path.is_file()
+                    or hashlib.sha256(artifact_path.read_bytes()).hexdigest() != item["sha256"]
+                ):
+                    artifacts_safe = False
+                    break
+            except OSError:
+                artifacts_safe = False
+                break
+        if not report_safe or not artifacts_safe:
+            result.blocked.append(f"UI L3 design Review 报告或 artifact 已漂移: {task_id}")
+            continue
+        expected_reviews.append(
+            {
+                "task_id": task_id,
+                "report": str(review.get("report", "")),
+                "sha256": str(review.get("report_sha256", "")),
+                "recorded_at": str(review.get("recorded_at", "")),
+            }
+        )
+    result.check(
+        bool(expected_reviews) and record.get("design_reviews") == expected_reviews,
+        "UI 审批绑定当前 design Review",
+        "UI 审批 design_reviews 与当前 Review 不一致",
+    )
+    commit_sha = str(record.get("commit_sha", ""))
+    commit_valid = (
+        bool(re.fullmatch(r"[0-9a-f]{40,64}", commit_sha))
+        and try_run(("git", "merge-base", "--is-ancestor", commit_sha, "HEAD"), cwd=root).ok
+    )
+    result.check(commit_valid, "UI 审批提交仍在当前 lineage", "UI 审批 commit_sha 无效或不属于当前 HEAD")
 
 
 def split_row(line: str) -> list[str]:
@@ -91,17 +250,23 @@ def parse_task_rows(content: str) -> list[tuple[str, str, str]]:
 
 
 def parse_task_statuses(content: str) -> dict[str, list[str]]:
+    """Return statuses keyed only by task type; IDs are a separate namespace."""
     statuses: dict[str, list[str]] = {}
-    for task_id, task_type, status in parse_task_rows(content):
+    for _, task_type, status in parse_task_rows(content):
         statuses.setdefault(task_type, []).append(status)
-        if task_id:
-            statuses.setdefault(task_id, []).append(status)
     return statuses
+
+
+def parse_task_id_statuses(content: str) -> dict[str, str]:
+    return {task_id: status for task_id, _, status in parse_task_rows(content) if task_id}
 
 
 def task_keyword(text: str, task_names: list[str]) -> str:
     value = str(text)
-    known = next((key for key in task_names if key in value), "")
+    known = next(
+        (key for key in task_names if re.search(rf"(?<![A-Za-z0-9-]){re.escape(key)}(?![A-Za-z0-9-])", value)),
+        "",
+    )
     if known:
         return known
     fallback = re.match(r"^([a-z][a-z0-9-]+)\b", value)
@@ -123,12 +288,6 @@ def task_status(keyword: str, content: str, statuses: dict[str, list[str]], resu
         if (match := re.search(r"\b(done|完成|通过|in-progress|pending|blocked|rollback|回退)\b", line, re.I))
     ]
     return matches[-1] if matches else ""
-
-
-def sprint_list_field(content: str, field: str) -> list[str]:
-    """Read a compact YAML-style list from the Sprint header without treating Markdown as YAML."""
-    match = re.search(rf"(?m)^\s*{re.escape(field)}\s*:\s*\[([^]]*)]\s*$", content)
-    return [item.strip().strip("'\"") for item in match.group(1).split(",") if item.strip()] if match else []
 
 
 def stage_tasks(stage: Any) -> list[str]:
@@ -257,6 +416,7 @@ def evaluate(
     task_rows = parse_task_rows(content)
     statuses = parse_task_statuses(content)
     type_capabilities = rules.get("sprint_type_task_capabilities") or {}
+    sprint_type = ""
     if type_capabilities:
         sprint_type_match = re.search(r"(?m)^\s*sprint_type\s*:\s*([a-z0-9-]+)\s*$", content)
         if not sprint_type_match:
@@ -290,10 +450,21 @@ def evaluate(
         if duplicate_ids:
             result.blocked.append(f"Sprint 任务 ID 重复: {', '.join(duplicate_ids)}")
             return result
+        reserved_ids = sorted({row_id for row_id, _, _ in task_rows if row_id} & set(task_names))
+        if reserved_ids:
+            result.blocked.append(f"Sprint 任务 ID 不得与任务类型同名: {', '.join(reserved_ids)}")
+            return result
         matching_rows = [row for row in task_rows if row[1] == task_type and (not task_id or row[0] == task_id)]
         if len(matching_rows) != 1:
             result.blocked.append(f"当前任务未登记到 Sprint 任务表: {task_id or task_type} ({task_type})")
             return result
+    if task.get("execution_contract") == "integration-v1":
+        contract = integration_contract(sprint_file, task_id or task_type, task)
+        result.blocked.extend(validate_integration_contract(contract, task, harness_config))
+        identity, identity_errors = delivery_identity(root, sprint_file.stem)
+        result.blocked.extend(identity_errors)
+        if not identity_errors:
+            result.passed.append(f"integration 已绑定 build/deploy 身份: {identity['build_state']['source_commit']}")
     sprint_id = sprint_file.stem
     if type_capabilities:
         for earlier_stage in stages[:stage_index]:
@@ -329,13 +500,71 @@ def evaluate(
                     else all(DONE.match(status) for status in statuses[name])
                 )
             }
-            if requirement == "all" and set(present) != set(applicable):
+            # Optional stages are selected by the Sprint's declared impact surface:
+            # zero tasks may be omitted, while every task that is explicitly planned
+            # must still complete. Non-optional stages continue to require every
+            # project-applicable task from the sequence.
+            if requirement == "all" and not optional and set(present) != set(applicable):
                 missing = [name for name in applicable if name not in present]
                 result.blocked.append(f"前序阶段任务未列入 Sprint(all): {', '.join(missing)}")
                 continue
             satisfied = bool(completed) if requirement == "any" else len(completed) == len(present)
             if present and not satisfied:
                 result.blocked.append(f"前序阶段未完成({requirement}): {', '.join(present)}")
+                continue
+            if sprint_planning_contract(sprint_file).get("planning_contract_version") == 2:
+                evidence_rules_path = rules_path or HarnessPaths.detect(project=root).rules / "task-rules.yml"
+                for completed_type in sorted(completed):
+                    completed_rows = [row for row in task_rows if row[1] == completed_type]
+                    if completed_type == outcome.get("task") and not all(DONE.match(row[2]) for row in completed_rows):
+                        continue
+                    for source_id, source_type, _ in completed_rows:
+                        if not source_id:
+                            result.blocked.append(f"前序任务缺少 ID，无法验证 attempt: {source_type}")
+                            continue
+                        source_task = (rules.get("tasks") or {}).get(source_type, {})
+                        evidence_errors = validate_attempt(
+                            root,
+                            sprint_file,
+                            evidence_rules_path,
+                            source_id,
+                            source_type,
+                            source_task,
+                            upstream=True,
+                        )
+                        result.blocked.extend(
+                            f"前序任务 {source_id} ({source_type}) 当前 attempt 无效: {error}"
+                            for error in evidence_errors
+                        )
+        if sprint_planning_contract(sprint_file).get("planning_contract_version") == 3 and task_id:
+            structured_rows = table_rows(content)
+            dependency_graph, dependency_errors = task_dependency_graph(structured_rows)
+            result.blocked.extend(dependency_errors)
+            dependencies = transitive_task_dependencies(dependency_graph, task_id)
+            rows_by_id = {str(row.get("id")): row for row in structured_rows if row.get("id")}
+            evidence_rules_path = rules_path or HarnessPaths.detect(project=root).rules / "task-rules.yml"
+            for source_id in sorted(dependencies):
+                source_row = rows_by_id.get(source_id, {})
+                source_type = source_row.get("类型") or source_row.get("type") or ""
+                source_status = source_row.get("状态") or source_row.get("status") or ""
+                if not DONE.match(source_status):
+                    result.blocked.append(
+                        f"显式依赖任务 {source_id} ({source_type}) 未完成: {source_status or '未找到'}"
+                    )
+                    continue
+                source_task = (rules.get("tasks") or {}).get(source_type, {})
+                evidence_errors = validate_attempt(
+                    root,
+                    sprint_file,
+                    evidence_rules_path,
+                    source_id,
+                    source_type,
+                    source_task,
+                    upstream=True,
+                )
+                result.blocked.extend(
+                    f"显式依赖任务 {source_id} ({source_type}) 当前 attempt 无效: {error}" for error in evidence_errors
+                )
     for prerequisite in task.get("prerequisites", []):
         keyword = task_keyword(prerequisite, task_names)
         if keyword:
@@ -396,12 +625,18 @@ def evaluate(
     )
     outcome = task.get("upstream_outcome") or {}
     outcome_statuses = {str(status).lower() for status in outcome.get("statuses", [])}
-    outcome_satisfied = outcome.get("task") and all(
-        status.lower() in outcome_statuses for status in statuses.get(outcome.get("task"), [])
+    outcome_source_rows = [row for row in task_rows if row[1] == outcome.get("task")] if outcome.get("task") else []
+    outcome_source_statuses = statuses.get(outcome.get("task"), []) if outcome.get("task") else []
+    outcome_satisfied = (
+        len(outcome_source_rows) == 1
+        and bool(outcome_source_statuses)
+        and all(status.lower() in outcome_statuses for status in outcome_source_statuses)
     )
-    if outcome.get("require_action_evidence") is True and outcome_satisfied:
-        source_rows = [row for row in task_rows if row[1] == outcome.get("task")]
-        for source_id, source_type, _ in source_rows:
+    if outcome.get("task") and not outcome_satisfied:
+        result.blocked.append(f"upstream_outcome 要求唯一 {outcome.get('task')} 且状态属于 {sorted(outcome_statuses)}")
+    outcome_failed = outcome_satisfied and not all(DONE.match(status) for status in outcome_source_statuses)
+    if outcome.get("require_action_evidence") is True and outcome_failed:
+        for source_id, source_type, _ in outcome_source_rows:
             source_task = (rules.get("tasks") or {}).get(source_type, {})
             source_action = (source_task.get("execute") or {}).get("action")
             result.blocked.extend(
@@ -416,42 +651,19 @@ def evaluate(
                 )
             )
     external = task.get("external_evidence") or {}
-    if external.get("kind") == "sprint-signoffs":
-        source_sprints = sprint_list_field(content, external.get("field", "source_sprints"))
-        result.check(bool(source_sprints), "已声明 source_sprints", "Sprint 计划缺少非空 source_sprints: [...] 输入")
-        result.check(
-            len(source_sprints) == len(set(source_sprints)),
-            "source_sprints 无重复",
-            "source_sprints 含重复 Sprint",
+    external_sprint_types = external.get("sprint_types")
+    external_applies = external_sprint_types is None or sprint_type in external_sprint_types
+    if external.get("kind") == "sprint-signoffs" and external_applies:
+        validation = validate_deployment_candidate(
+            root,
+            content,
+            source_field=external.get("field", "source_sprints"),
+            candidate_field=external.get("candidate_field", ""),
+            require_head_match=external.get("require_head_match") is True,
+            require_source_ancestry=external.get("require_source_ancestry") is True,
         )
-        for source_sprint in source_sprints:
-            if not re.fullmatch(r"sprint-\d+-[a-z0-9][a-z0-9-]*", source_sprint):
-                result.blocked.append(f"source_sprints 含非法 Sprint ID: {source_sprint}")
-                continue
-            signoff = root / "docs/acceptance-reports" / f"{source_sprint}-boss-signoff.yml"
-            loaded = load_yaml(signoff) if signoff.exists() else {}
-            record = loaded if isinstance(loaded, dict) else {}
-            if signoff.exists() and not isinstance(loaded, dict):
-                result.blocked.append(f"源 Sprint 审批格式非法（顶层必须是对象）: {signoff}")
-            commit = str(record.get("commit_sha", ""))
-            result.check(signoff.exists(), f"源 Sprint 审批存在: {source_sprint}", f"源 Sprint 审批缺失: {signoff}")
-            result.check(
-                record.get("decision") == "approved",
-                f"源 Sprint 已批准: {source_sprint}",
-                f"源 Sprint 未批准: {source_sprint}",
-            )
-            result.check(
-                record.get("sprint") == source_sprint,
-                f"源 Sprint 审批身份匹配: {source_sprint}",
-                f"源 Sprint 审批身份不匹配: {record.get('sprint', '缺失')} != {source_sprint}",
-            )
-            commit_exists = (
-                bool(re.fullmatch(r"[a-f0-9]{7,40}", commit))
-                and try_run(["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=root).ok
-            )
-            result.check(
-                commit_exists, f"源 Sprint commit 有效: {commit}", f"源 Sprint commit 无效: {commit or '缺失'}"
-            )
+        result.passed.extend(validation.passed)
+        result.blocked.extend(validation.errors)
     for name in upstream:
         definition = (rules.get("tasks") or {}).get(name, {})
         output = definition.get("outputs", {}).get("path", "")
@@ -487,39 +699,43 @@ def evaluate(
                     matched = marker in text
                 result.check(matched, f"质量信号满足: {marker}", f"质量信号缺失: {marker}")
     approval = task.get("approval_artifact")
-    if approval:
+    approval_phase = task.get("approval_phase", "all")
+    approval_record: dict[str, Any] = {}
+    approval_loaded = False
+    if approval and (approval_phase == "all" or approval_phase == phase):
         path = root / fill_pattern(approval, sprint_id)
         result.check(path.exists(), f"审批记录存在: {path}", f"审批记录不存在: {path}")
         if path.exists():
-            result.check(load_yaml(path).get("decision") == "approved", "审批记录状态为 approved", "审批记录未放行")
+            approval_loaded = True
+            approval_record = load_mapping_evidence(path, result, "审批记录")
+            result.check(
+                approval_record.get("decision") == "approved",
+                "审批记录状态为 approved",
+                "审批记录格式非法或未放行",
+            )
     for declaration in task.get("preflight_file_checks", []):
         relative = re.sub(r"\s*必须存在.*$", "", declaration).strip()
         path = root / fill_pattern(relative, sprint_id)
         result.check(path.exists(), f"产出物存在: {relative}", f"产出物缺失: {relative}")
-    state_key = {"build-image": "ready", "promote-test": "success"}.get(task_type)
+    state_key = {"promote-test": "success"}.get(task_type)
     if state_key:
-        environment_match = re.search(r"(test|prod|staging)", sprint_id)
-        environment = environment_match.group(1) if environment_match else "test"
-        if task_type == "build-image":
-            state_path = root / f".harness/state/promote-prep-{environment}.json"
-        else:
-            state_path = root / f".harness/state/build-image-{sprint_id}.json"
-            if not state_path.exists():
-                series_match = re.match(r"^sprint-\d+", sprint_id)
-                series = series_match.group(0) if series_match else sprint_id
-                candidates = (
-                    sorted(
-                        (root / ".harness/state").glob(f"build-image-{series}*.json"),
-                        key=lambda path: path.stat().st_mtime,
-                        reverse=True,
-                    )
-                    if (root / ".harness/state").exists()
-                    else []
+        state_path = root / f".harness/state/build-image-{sprint_id}.json"
+        if not state_path.exists():
+            series_match = re.match(r"^sprint-\d+", sprint_id)
+            series = series_match.group(0) if series_match else sprint_id
+            candidates = (
+                sorted(
+                    (root / ".harness/state").glob(f"build-image-{series}*.json"),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
                 )
-                if len(candidates) == 1:
-                    state_path = candidates[0]
-                elif len(candidates) > 1:
-                    result.blocked.append(f"build-image 状态文件不唯一：{', '.join(str(path) for path in candidates)}")
+                if (root / ".harness/state").exists()
+                else []
+            )
+            if len(candidates) == 1:
+                state_path = candidates[0]
+            elif len(candidates) > 1:
+                result.blocked.append(f"build-image 状态文件不唯一：{', '.join(str(path) for path in candidates)}")
         result.check(state_path.exists(), f"部署状态文件存在: {state_path}", f"部署状态文件缺失: {state_path}")
         if state_path.exists():
             try:
@@ -530,6 +746,30 @@ def evaluate(
                         "部署状态 Sprint 匹配",
                         f"部署状态 sprint 不匹配: {state.get('sprint')} != {sprint_id}",
                     )
+                    head = try_run(("git", "rev-parse", "HEAD"), cwd=root)
+                    current_head = head.stdout.strip() if head.ok else ""
+                    result.check(
+                        bool(current_head) and state.get("source_commit") == current_head,
+                        "build-image 来源 commit 与当前部署候选一致",
+                        "build-image 来源 commit 缺失或已偏离当前 HEAD",
+                    )
+                    if sprint_type == "deploy-sprint-test":
+                        validation = validate_deployment_candidate(
+                            root,
+                            content,
+                            source_field="source_sprints",
+                            candidate_field="base_sha",
+                            require_head_match=True,
+                            require_source_ancestry=True,
+                        )
+                        result.passed.extend(validation.passed)
+                        result.blocked.extend(validation.errors)
+                        result.check(
+                            state.get("candidate_commit") == validation.candidate_commit
+                            and state.get("source_signoffs") == validation.source_signoffs,
+                            "build-image 已绑定当前部署候选和源 Sprint 审批摘要",
+                            "build-image 未绑定当前部署候选，或源 Sprint 审批在构建后发生变化",
+                        )
                 result.check(
                     state.get(state_key) is True,
                     f"部署状态门控通过: {state_key}=true",
@@ -542,22 +782,27 @@ def evaluate(
         config = load_harness_config()
         match = re.match(r"^sprint-\d+", sprint_id)
         series = match.group(0) if match else sprint_id
-        if task_type == "code" and config.get("gates", {}).get("ui_design_l3") is True:
+        if task_type == "code" and config.get("gates", {}).get("ui_design_l3") is True and "design" in statuses:
             approval_path = root / "docs/design-docs" / f"{series}-design-approval.yml"
+            design_approval = (
+                load_mapping_evidence(approval_path, result, "UI Design L3 审批") if approval_path.exists() else {}
+            )
             result.check(
-                approval_path.exists() and load_yaml(approval_path).get("decision") == "approved",
+                approval_path.exists() and design_approval.get("decision") == "approved",
                 "UI Design L3 审批通过",
                 f"UI Design L3 审批缺失或未放行: {approval_path}",
             )
+            if design_approval.get("decision") == "approved":
+                validate_ui_design_approval(root, sprint_file, task_rows, design_approval, result)
         if (
             task_type in {"quality", "product-acceptance", "pr", "sprint-close"}
             and config.get("walkthrough_env") == "test"
             and "code" in statuses
         ):
             required = (
-                "promote-prep",
                 "build-image",
                 "promote-test",
+                "integration",
                 "quality",
                 "product-acceptance",
                 "pr",
@@ -581,7 +826,6 @@ def evaluate(
             "product-acceptance",
             "pr",
             "sprint-close",
-            "promote-prep",
             "promote-test",
             "build-image",
         }:
@@ -590,21 +834,13 @@ def evaluate(
             result.warnings.append(f"harness.yml 加载失败: {exc}")
     if phase == "review" and task_type == "pr" and approval:
         approval_path = root / fill_pattern(approval, sprint_id)
-        commit = str(load_yaml(approval_path).get("commit_sha", "")).strip() if approval_path.exists() else ""
+        if approval_path.exists() and not approval_loaded:
+            approval_record = load_mapping_evidence(approval_path, result, "审批记录")
+        commit = str(approval_record.get("commit_sha", "")).strip()
         if not commit:
             result.blocked.append("Boss signoff 缺少 commit_sha")
         else:
-            refs = ["origin/develop", "origin/test"] if config.get("walkthrough_env") == "test" else ["origin/develop"]
-            fetch = try_run(
-                ["git", "fetch", "origin", *[ref.removeprefix("origin/") for ref in refs], "--quiet"], cwd=root
-            )
-            result.check(fetch.ok, "目标分支引用已刷新", "无法刷新远端目标分支引用")
-            if fetch.ok:
-                for ref in refs:
-                    contained = try_run(["git", "merge-base", "--is-ancestor", commit, ref], cwd=root)
-                    result.check(
-                        contained.ok, f"signoff commit_sha 已抵达 {ref}", f"signoff commit_sha 未抵达 {ref}: {commit}"
-                    )
+            validate_signoff_delivery_refs(root, config, commit, result)
     if phase == "review" and task_type == "dependency-change":
         sessions = []
         state_root = root / ".harness/state/dependency-sessions"
@@ -651,6 +887,20 @@ def evaluate(
                     "消费者契约已通过",
                     f"消费者契约尚未通过: {session.get('status')}",
                 )
+    delivery_contract = (rules.get("sprint_delivery_contracts") or {}).get(sprint_type, {})
+    terminal_tasks = set(delivery_contract.get("terminal_tasks", [])) if isinstance(delivery_contract, dict) else set()
+    if phase == "review" and task_type in terminal_tasks:
+        outcome_errors = validate_sprint_outcome_evidence(
+            root,
+            sprint_file,
+            task_id or task_type,
+            task_type,
+            delivery_contract.get("outcome_producer"),
+        )
+        if outcome_errors:
+            result.blocked.extend(outcome_errors)
+        else:
+            result.passed.append("Sprint outcome evidence 已绑定交付契约并覆盖全部验收条件")
     attempt_errors: list[str] = []
     if phase == "review":
         evidence_rules = rules_path or HarnessPaths.detect(project=root).rules / "task-rules.yml"
@@ -663,7 +913,7 @@ def evaluate(
             root=root,
             mode=load_harness_config()["project"]["mode"],
             phase="artifact",
-            values={"sprint": sprint_id},
+            values={"sprint": sprint_id, "task_id": task_id or task_type},
         )
         record_phase(
             root,
@@ -767,10 +1017,11 @@ def main() -> int:
     preflight_id = (rules.get("sprint_preflight") or {}).get("action", "")
     mode = harness_config["project"]["mode"]
     task = (rules.get("tasks") or {}).get(args.task_type, {})
+    pending_attempt = None
     if args.phase == "preflight":
         # Revoke any previous executable attempt before running checks that may
         # fail, crash, or create side effects.
-        ensure_attempt(
+        pending_attempt = ensure_attempt(
             root,
             args.sprint_plan_file.resolve(),
             rules_file,
@@ -789,25 +1040,6 @@ def main() -> int:
         result.check(execution.ok, f"Preflight action 通过: {preflight_id}", f"Preflight action 未通过: {preflight_id}")
     elif args.phase == "preflight":
         result.blocked.append("sprint_preflight.action 未配置")
-    infra = None
-    if args.phase == "preflight" and (action_id := task.get("infra_action")):
-        infra = action_argv(
-            action_id,
-            root=root,
-            mode=mode,
-            phase="preflight",
-            values={"sprint": args.sprint_plan_file.stem},
-        )
-    if infra and not result.blocked:
-        success, detail = run_cached_command(
-            infra,
-            root / ".harness/infra-ready-cache.json",
-            infra_cache_key(root, args.task_type, action_id, infra),
-            ttl,
-            root,
-            resolve_action(action_id).timeout_seconds,
-        )
-        result.check(success, f"infra_action 通过: {action_id}", f"infra_action 未通过: {action_id} {detail}")
     evaluated = evaluate(
         args.task_type,
         args.sprint_plan_file.resolve(),
@@ -821,6 +1053,33 @@ def main() -> int:
     result.passed += evaluated.passed
     result.blocked += evaluated.blocked
     result.warnings += evaluated.warnings
+    infra = None
+    if args.phase == "preflight" and (action_id := task.get("infra_action")):
+        infra = action_argv(
+            action_id,
+            root=root,
+            mode=mode,
+            phase="preflight",
+            values={
+                "sprint": args.sprint_plan_file.stem,
+                "task_id": args.task_id,
+                "run_id": str((pending_attempt or {}).get("run_id", "")),
+            },
+        )
+    if infra and not result.blocked:
+        if task.get("infra_cache", "ttl") == "never":
+            execution = try_run(infra, cwd=root, timeout=resolve_action(action_id).timeout_seconds)
+            success, detail = execution.ok, (execution.stdout or execution.stderr).strip()[-2000:]
+        else:
+            success, detail = run_cached_command(
+                infra,
+                root / ".harness/infra-ready-cache.json",
+                infra_cache_key(root, args.task_type, action_id, infra),
+                ttl,
+                root,
+                resolve_action(action_id).timeout_seconds,
+            )
+        result.check(success, f"infra_action 通过: {action_id}", f"infra_action 未通过: {action_id} {detail}")
     if args.phase == "preflight" and not result.blocked:
         activate_attempt(
             root,

@@ -7,7 +7,7 @@
 
 ## 上下文边界
 
-Coding 只读取本次迭代 PRD、设计、技术方案与项目编码规范。不得回读历史 PRD/设计/技术方案作为实现依据；历史变更、优化、删除必须已经沉淀在本次迭代技术方案中。
+存在适用前端技术方案时，Coding 的直接派生输入只有 `task-context.upstream_inputs` 投影出的本轮前端技术方案；PRD/设计是技术方案的上游，不再与技术方案并列指导实现。USER_STORIES 摘要仍用于漂移门禁，但 `requirements.access=integrity-only` 时不得直接回读需求补充实现。不得回读历史 PRD/设计/技术方案；历史变更、优化、删除必须已经沉淀在本轮技术方案中。流程明确不产生技术方案时，只使用 task-context 的显式直接输入和项目编码基线，不自行检索或补造设计。
 
 ---
 
@@ -28,8 +28,8 @@ Coding 只读取本次迭代 PRD、设计、技术方案与项目编码规范。
 
 ## 安全约束
 
-- 富文本 DOMPurify、用户输入 Zod 客户端校验（后端校验仍必须）
-- 禁止前端硬编码 API Key/Secret、JWT 仅通过 HttpOnly Cookie
+- 富文本和外部输入使用当前 technology Profile 声明的安全/Schema 能力；客户端校验不替代服务端信任边界
+- 禁止前端硬编码 API Key/Secret；认证凭据存储和传递服从 Architecture，不假定固定 Token 形态
 
 ---
 
@@ -50,11 +50,10 @@ Coding 只读取本次迭代 PRD、设计、技术方案与项目编码规范。
 **允许工具**：文件读写/搜索、bash（build/test/lint）、子代理、`vue-best-practices`、`chrome-devtools`、`webapp-testing` | **禁止**：修改规范文档
 
 **代码生成约束清单**：
-- 组件 `<script setup lang="ts">`，禁止 Options API
-- 状态：局部 ref vs 全局 Pinia store 划分正确
-- API 封装在 `services/`，禁止组件直接 fetch
-- 路由 `meta.requiresAuth` 标注、命名 kebab-case
-- 性能：LCP < 2s、H5 无 Vue 运行时
-- 命名：组件 PascalCase、Store useXxxStore
-- 安全：DOMPurify + 无硬编码密钥
+- 框架语法、组件模式、路由、状态库和命名与 `config/technology.yml` 的当前 Profile 一致
+- 状态具有单一真源和最近拥有者，可推导状态未重复存储，服务端状态未复制为长期客户端真源
+- API 调用复用 Architecture 声明的数据访问/认证/错误边界，不由组件建立旁路
+- 共享组件具有技术方案登记的真实消费者与稳定语义，不新增万能配置组件
+- 性能、响应式、埋点和状态机只实现技术方案已触发内容，并提供对应浏览器证据
+- 安全：按真实输入/展示边界处理，无硬编码密钥
 - 联调产出物完整

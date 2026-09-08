@@ -6,13 +6,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from mai_harness.runtime.application.required_secrets import analyze_required_secrets
-from mai_harness.runtime.infrastructure.deploy_config import load_environments_compat
+from mai_harness.runtime.infrastructure.deploy_config import get_deploy_adapter, load_environments_compat
 from mai_harness.runtime.infrastructure.local_runtime_env import load_local_runtime_env_snapshot
 from mai_harness.runtime.infrastructure.runtime_template import analyze_runtime_template
 from mai_harness.runtime.infrastructure.secrets_file import expected_secrets_source, load_secrets_file_snapshot
@@ -34,6 +35,29 @@ REQUIRED_DEPLOY_INPUTS = {
     "test": ("TEST_DEPLOY_USER", "TEST_DEPLOY_HOST", "TEST_DEPLOY_PORT", "TEST_DEPLOY_WORKDIR", "TEST_API_BASE_URL"),
     "prod": ("PROD_DEPLOY_USER", "PROD_DEPLOY_HOST", "PROD_DEPLOY_PORT", "PROD_DEPLOY_WORKDIR", "PROD_API_BASE_URL"),
 }
+ADAPTER_ACTIONS = {"deploy", "preflight", "watch", "rollback"}
+
+
+def validate_adapter(name: str, entry: dict[str, Any], result: ValidationIssues) -> bool:
+    try:
+        adapter = get_deploy_adapter(entry)
+    except ValueError as exc:
+        result.schema_errors.append(f"environments.{name}.adapter: {exc}")
+        return True
+    if adapter is None:
+        return False
+    if not adapter.actions <= ADAPTER_ACTIONS:
+        result.schema_errors.append(f"environments.{name}.adapter.actions 含未知 action")
+    executable = Path(adapter.argv[0])
+    unsafe_path = any(Path(item).is_absolute() or ".." in Path(item).parts for item in adapter.argv if "/" in item)
+    embedded_secret = any(
+        re.search(r"(?:password|token|private[_-]?key|secret)=", item, re.IGNORECASE) for item in adapter.argv
+    )
+    if executable.is_absolute() or ".." in executable.parts or unsafe_path or embedded_secret:
+        result.schema_errors.append(f"environments.{name}.adapter.argv 必须是项目内相对 argv 且不得内嵌 secret")
+    if any(any(char in item for char in (";", "|", "`", "\n")) for item in adapter.argv):
+        result.schema_errors.append(f"environments.{name}.adapter.argv 不得包含 shell 控制字符")
+    return True
 
 
 @dataclass
@@ -82,11 +106,12 @@ def collect_validation_issues(
             continue
         if not entry.get("enabled"):
             continue
+        adapter_mode = validate_adapter(name, entry, result)
         deploy_mode = entry.get("deploy_mode", "docker")
         if deploy_mode not in {"docker", "cloud-native"}:
             result.schema_errors.append(f"environments.{name}.deploy_mode 必须是 docker 或 cloud-native")
             continue
-        mode_fields = DOCKER_FIELDS if deploy_mode == "docker" else CLOUD_NATIVE_FIELDS
+        mode_fields = () if adapter_mode else (DOCKER_FIELDS if deploy_mode == "docker" else CLOUD_NATIVE_FIELDS)
         for key in (*required_fields, *mode_fields):
             if entry.get(key) in (None, ""):
                 result.schema_errors.append(f"environments.{name}.{key} 缺失或为空")
@@ -95,7 +120,11 @@ def collect_validation_issues(
             result.schema_errors.append(
                 f"environments.{name}.secrets_source 必须为 {expected}，当前：{entry['secrets_source']}"
             )
-        if deploy_mode == "docker":
+        if adapter_mode:
+            analyzed = analyze_required_secrets(name, entry)
+            result.schema_errors += analyzed["schema_errors"]
+            result.warnings += analyzed["warnings"]
+        elif deploy_mode == "docker":
             for key, prefix in (
                 ("compose_file", f"deploy/{name}/"),
                 ("remote_compose_file", f"deploy/{name}/"),
@@ -113,7 +142,7 @@ def collect_validation_issues(
                 result.schema_errors.append(
                     f"environments.{name}.resolved_secrets 缺少部署输入：{', '.join(missing_inputs)}"
                 )
-        else:
+        elif deploy_mode == "cloud-native" and not adapter_mode:
             analyzed = {"secrets": list(entry.get("credential_refs", [])), "schema_errors": [], "warnings": []}
             releases = entry.get("helm_releases", [])
             if not isinstance(releases, list) or not releases:
@@ -127,7 +156,11 @@ def collect_validation_issues(
             missing = [key for key in analyzed["secrets"] if not secret_provided(key, env_map)]
             if missing:
                 result.secret_errors.append(f"environments.{name} 缺少 secret：{', '.join(missing)}")
-        template_path = (templates.get(name) or runtime_template_path(entry)) if deploy_mode == "docker" else ""
+        template_path = (
+            (templates.get(name) or runtime_template_path(entry))
+            if deploy_mode == "docker" and not adapter_mode
+            else ""
+        )
         if template_path:
             if not Path(template_path).exists() and name not in contents:
                 result.schema_errors.append(f"environments.{name}.runtime_template 未找到：{template_path}")

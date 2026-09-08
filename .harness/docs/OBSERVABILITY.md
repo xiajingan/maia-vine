@@ -3,83 +3,43 @@
 > 线上观测与验证规范。`release` / `prod-deploy` 部署成功后执行。
 > 日志/错误处理规范见 [CODING_BACKEND.md](CODING_BACKEND.md)，部署架构见 [../ARCHITECTURE.md](../ARCHITECTURE.md)。
 >
-> **可执行查询模板**：[`templates/observability/`](../templates/observability/)
-> 含 PromQL（`error-rate` / `p95-latency` / `slo-burn` / `saturation`）与 LogQL
-> （`errors-by-service` / `trace` / `no-secret-leak`）。本文件不再重复展开模板内容。
+> **查询示例**：[`templates/observability/`](../templates/observability/)
+> 其中指标名、窗口、目标和依赖均为示例，必须按项目 Architecture 改写后才能作为证据；
+> `scaffold` 只创建目录，不会复制示例形成虚假通过资产。
 >
 > **校验入口**：`uv run --project .harness/runtime harness observability-check validate`
+> **适用资产真源**：`config/harness.yml#observability.required_assets`；仅其中声明的
+> `dashboards / alerts / queries / runbooks` 会由门禁强制检查，空数组不制造虚假资产。
 
 **产出物**：`docs/observability-reports/sprint-N-observe.md`（须更新 `index.md`）
 
 ---
 
-## 观测维度体系
+## 观测维度与触发器
 
-### 维度一：健康检查（6 项）
+Observe 只验证本项目声明且本次部署影响的信号。数值、窗口、目标设备、依赖名称和告警级别必须来自 `ARCHITECTURE.md` 质量属性基线、部署配置或本次技术方案；Harness 不提供跨项目阈值。
 
-| # | 检查项 | 期望结果 |
-|---|--------|----------|
-| 1 | API `GET /health` | HTTP 200 |
-| 2 | API `GET /ready`（含 database + redis） | HTTP 200，`status: "ok"` |
-| 3 | 前端页面可访问 | HTTP 200 |
-| 4 | SSL 证书有效 | ssl_verify_result = 0 |
-| 5 | DNS 解析正确 | 解析到预期 IP / CNAME |
-| 6 | 响应时间 | < 500ms |
+| 维度 | 何时适用 | 最小输出 |
+|------|----------|----------|
+| 健康/就绪 | Architecture 声明对应 endpoint | 实际 endpoint、期望状态与结果 |
+| 日志/Trace | 新增关键链路、失败模式或审计要求 | 项目字段契约、关联 ID 与脱敏查询证据 |
+| 指标/SLO | Architecture 声明 SLI/SLO | 指标、项目目标、观察窗口与实际值 |
+| 告警/Runbook | SLO 或高风险失败需要人员响应 | 项目阈值、持续窗口、通知通道和 Runbook |
+| 部署/依赖 | 本次拓扑、版本、实例或依赖发生变化 | 预期拓扑/版本与实际证据 |
 
-### 维度二：日志验证（6 项）
-
-| # | 检查项 | 期望结果 |
-|---|--------|----------|
-| 1 | 日志输出到部署平台日志系统 | 有新日志产生 |
-| 2 | JSON 结构化格式 | 含 `level` / `time` / `msg` |
-| 3 | 每条日志包含 requestId | `requestId` 非空 |
-| 4 | 无敏感信息泄露 | 不含 API Key、Token、密码明文 |
-| 5 | 无 stack trace 泄露到响应 | 错误响应仅含 `code` + `message` + `requestId` |
-| 6 | 生产日志级别 ≥ INFO | `level` 不低于 INFO |
-
-### 维度三：监控指标（6 项）
-
-| # | 指标 | 基线 |
-|---|------|------|
-| 1 | API P50 延迟 | < 200ms |
-| 2 | API P99 延迟 | < 1000ms |
-| 3 | 错误率（5xx） | < 1% |
-| 4 | 资源利用率 | CPU / Memory < 80% |
-| 5 | 数据库连接池 | 活跃连接 < 池上限 80% |
-| 6 | Redis 连接 | 正常，延迟 < 5ms |
-
-### 维度四：告警基线（5 项）
-
-| # | 告警规则 | 触发条件 |
-|---|----------|----------|
-| 1 | 错误率告警 | 5xx 率 > 5%（5min 窗口） |
-| 2 | 延迟告警 | P99 > 基线 2x |
-| 3 | 服务不可用 | 健康检查连续失败 ≥ 2 次 |
-| 4 | 告警通道可达 | 通知渠道已验证 |
-| 5 | 无未确认告警 | 近 1h 无 open incident |
-
-### 维度五：部署验证（6 项）
-
-| # | 检查项 | 期望结果 |
-|---|--------|----------|
-| 1 | 版本与预期一致 | 匹配 release tag |
-| 2 | 环境变量配置正确 | 关键配置项已设置 |
-| 3 | 依赖服务连通 | ARCHITECTURE.md 中定义的依赖均可达 |
-| 4 | 实例数在预期范围 | min ≤ N ≤ max |
-| 5 | 无 crash loop | 30min 内无非正常重启 |
-| 6 | 流量指向最新版本 | 100% 切至最新 |
+不存在的 Redis、数据库、前端、SSL、P50/P99 或资源指标不得为补齐维度而引入。不可观测但被 Architecture 声明为发布门禁的信号必须阻断，不能写“暂不适用”。
 
 ---
 
 ## 通过标准与严重级别
 
-**通过**：5 个维度全部检查项达标。
+**通过**：所有适用信号达到项目声明的目标，并能回溯目标来源和实际查询证据。
 
 | 级别 | 定义 | 处理 |
 |------|------|------|
-| Critical | 服务不可用、健康检查失败、依赖断连 | 立即回滚 |
-| Major | 性能超基线 2x、日志无 requestId、告警未配置 | 当前迭代修复 |
-| Minor | 性能接近上限、日志部分不规范 | 记录 `tech-debt-tracker.md` |
+| Critical | 项目声明的可用性/安全红线失败 | 保留候选、立即告警并修复；仅人员明确要求时发布回滚 |
+| Major | 项目 SLO、审计、关键链路或必要告警不满足 | 当前迭代修复 |
+| Minor | 非阻断信号接近项目预警线或证据质量不足 | 记录 `tech-debt-tracker.md` |
 
 ---
 
@@ -89,15 +49,15 @@
 
 **输入**：ARCHITECTURE.md（部署拓扑/日志系统/监控系统）+ 技术方案（API 列表/性能基线）+ Release 产出（版本号/URL）
 
-**每个检查项生成 ≥ 1 个可执行命令**，用例格式：`OBS-维度-序号` | 执行命令 | 期望结果 | 实际结果 | 判定
+每个适用信号生成一个可执行查询；相同查询能同时证明多个信号时复用证据。格式：`OBS-维度-序号` | 目标来源 | 执行命令 | 期望结果 | 实际结果 | 判定。
 
 ---
 
 ## 完成标准（DoD）
 
-- 5 维观测框架全部检查项已执行
+- 适用性矩阵已记录，每个适用信号都有项目目标与实际证据
 - 观测报告已生成并保存至 `docs/observability-reports/`
-- 健康检查 6/6 通过、日志正常、核心指标在基线内、告警已配置、部署版本正确
+- 项目声明的健康、日志、指标、告警和部署门禁全部通过
 
 ---
 

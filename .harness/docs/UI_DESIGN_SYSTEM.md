@@ -1,12 +1,12 @@
 # UI Design System
 
-> Harness 框架的统一 UI 设计系统：设计 token + 前端技术栈 + 组件模式。
+> Harness 提供的默认 UI Design System：设计 token + 可选前端 Profile + 组件模式。
 > 本文档与 [DESIGN.md](DESIGN.md)（设计哲学/流程）、[TECH_FRONTEND.md](TECH_FRONTEND.md)（前端工程方案）配套使用：
 > - DESIGN.md = 「为什么这样设计」（哲学、流程、走查）
 > - UI_DESIGN_SYSTEM.md = 「具体长什么样」（token、栈、组件）
 > - TECH_FRONTEND.md = 「代码怎么实现」（架构、约束）
 
-**目标**：所有基于 Harness 的项目在视觉 token 和交互质量上保持一致；技术栈以 `config/technology.yml` 为真源，本文提供默认 Vue profile。
+**目标**：同一项目内的视觉语义和交互质量保持一致；技术栈以 `config/technology.yml` 为真源，本文的 Vue 内容只在项目选择默认 Vue Profile 时适用。
 
 **产出物**：本文为只读规范。落地资源参见：
 - `templates/ui/tokens.css`（CSS 变量 — HTML 原型 + 应用入口共用）
@@ -17,7 +17,7 @@
 
 ## 1. 前端技术栈基线
 
-> 下表是 `technology.defaults.yml` 的默认适配，不是 `project.type=frontend` 的固定语言定义。项目覆盖技术栈时，必须同步登记 manifest、必需命令和本地组件约束。
+> 下表是 `technology.defaults.yml` 的默认 Vue Profile，不是 `project.type=frontend` 的固定语言定义。项目选择其他技术栈时，本表的 Vue/Pinia/vue-router/vue-i18n 规则不适用，并须在 `config/technology.yml` 登记 manifest、必需命令和对应本地组件 Profile。
 
 | 类别 | 选择 | 版本基线 | 说明 |
 |------|------|---------|------|
@@ -128,14 +128,7 @@
 
 ### 2.6 断点
 
-| Token | Px | 设备 |
-|-------|----|------|
-| `--bp-sm` | 640  | 小型平板纵向 |
-| `--bp-md` | 768  | 平板横向 |
-| `--bp-lg` | 1024 | 笔记本 |
-| `--bp-xl` | 1280 | 桌面（Dashboard 设计基线） |
-
-H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认样式 = mobile，断点向上叠加。
+断点是项目 Profile，不是 Harness 的统一产品答案。项目应从真实目标设备、现有布局和内容断裂点定义 token；只有本次影响 `responsive` 时才新增或验证断点。`375px`、`768px`、`1024px`、`1280px` 只能作为讨论候选，未经项目声明不得成为交付门禁。
 
 ### 2.7 动效
 
@@ -155,13 +148,7 @@ H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认
 
 ## 3. 布局系统
 
-| 容器 | 最大宽度 | 内边距 |
-|------|---------|--------|
-| H5 / Viewer | 100vw（375 基线，最大 480） | `--space-4` 横向 |
-| Dashboard / Admin | `1280px` 居中 | `--space-6` 横向 |
-| 文档/营销 | `1100px` 居中 | `--space-6` 横向 |
-
-栅格：12 列；间距 `--space-6`（24px）。卡片堆叠默认 `gap: --space-6`。
+容器宽度、栅格、间距和导航形态继承项目现有 Profile。新项目只定义主场景真正使用的一套布局；第二种设备或容器只有在 USER_STORIES/PRD 明确目标设备或内容确实断裂时增加。
 
 **信息层级**（与 DESIGN.md 一致）：一级=当前任务与状态 / 二级=结果解释与下一步 / 三级=辅助说明。视觉重点 = 业务重点。
 
@@ -169,7 +156,7 @@ H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认
 
 ## 4. 组件模式（Component Patterns）
 
-每个组件**必须**实现以下状态：default / hover / active / focus / loading / disabled / empty / error。
+组件只实现其语义和交互实际可达的状态。交互控件通常需要 default/focus/disabled；hover、active、loading、empty、error 由输入方式、异步行为和数据语义触发，不为目录完整性补空状态。
 
 ### 4.1 Button
 
@@ -240,24 +227,24 @@ H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认
 
 ---
 
-## 5. 状态完备清单（强制）
+## 5. 状态适用性目录
 
-> 每个页面交付前必须输出以下**全部 9 项**状态截图/原型。下表 ID 为 `Token 使用清单` 与未来自动校验工具（`harness check-state-coverage`，v2）使用的稳定标识，**禁止**重命名或裁剪。
+> 下表是页面状态分析的稳定目录，不表示每个页面都能到达全部状态。设计任务须判断适用性：本次变化直接影响的可达状态提供画面；现有组件已完整覆盖且未变化的状态可引用；不可达状态说明原因，不生成占位原型。ID 供追溯与自动校验使用，禁止重命名。
 
-| ID | 状态 | 必含 |
-|----|------|------|
-| S1 | 正常态（含真实示例数据） | ✅ |
-| S2 | 空态 | ✅ |
-| S3 | 加载态（skeleton） | ✅ |
-| S4 | 部分加载（局部错误） | ✅ |
-| S5 | 错误态（接口失败可重试） | ✅ |
-| S6 | 离线/降级态 | ✅ |
-| S7 | 权限不足 | ✅ |
-| S8 | 移动端 375px | ✅ |
-| S9 | 桌面端 1280px（Dashboard 类） | ✅ Dashboard 类必含 / 纯 H5 项目可豁免并在文档说明 |
+| ID | 状态 | 适用触发器 |
+|----|------|------------|
+| S1 | 正常态（含代表性示例数据） | 受影响页面必含 |
+| S2 | 空态 | 数据集合可能为空且用户需要行动 |
+| S3 | 加载态 | 存在用户可感知等待 |
+| S4 | 部分加载（局部错误） | 页面存在可独立失败区域 |
+| S5 | 错误态 | 当前操作或数据加载可能失败且需要恢复 |
+| S6 | 离线/降级态 | PRD/Architecture 要求或依赖确有降级行为 |
+| S7 | 权限不足 | 页面/操作存在权限分支 |
+| S8 | 移动端 375px | 项目目标设备包含该 Profile |
+| S9 | 桌面端 1280px | 项目目标设备包含 Dashboard Profile |
 
 **单一真相源约定**：
-- DESIGN.md / task-rules.yml / 任意走查清单中**禁止**重新枚举状态名；只引用本表 ID。
+- DESIGN.md / task-rules.yml / 任意走查清单中**禁止**重新枚举状态名；只引用本表 ID 和适用性结论。
 - 新增/移除状态须更新本节版本（见末尾 §10 规范更新流程）。
 
 ---
@@ -274,8 +261,8 @@ H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认
 
 ## 7. 国际化与方向
 
-- 所有可见文案通过 `vue-i18n`，禁止硬编码。
-- 中英双语作为基线，多语言项目须支持 RTL（`html[dir="rtl"]`）。
+- 项目启用国际化时，所有可见文案通过当前 technology Profile 声明的 i18n 能力管理，禁止建立第二套文案真源。
+- 支持语言和 RTL 要求来自项目产品策略；默认 Vue Profile 使用 `vue-i18n`，其他技术栈使用对应实现。
 - 数字、日期、货币使用 `Intl.*` 本地化；图标方向（箭头）随 `dir` 镜像。
 
 ---
@@ -284,7 +271,7 @@ H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认
 
 ### 8.1 应用入口
 
-`web/src/app.css`：
+默认 Vue + Tailwind Profile 的 `web/src/app.css`：
 ```css
 @import 'tailwindcss';
 @import './tokens.css';      /* 由 Harness 安装：templates/ui/tokens.css */
@@ -295,16 +282,16 @@ H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认
 ### 8.2 HTML 原型
 
 直接复制 `templates/ui/prototype-base.html`，内联 `tokens.css`，按需添加 section。
-所有原型必须：纯 HTML、单文件、无外网依赖（除 Inter 字体可用 system 兜底）、内含 mobile + desktop 两个断点画板。
+原型应为纯 HTML、单文件、无外网依赖，并只包含项目目标 Profile 与本次适用状态。只有 `impact_surfaces` 同时声明多个设备/Profile 时才输出多个断点画板。
 
 ### 8.3 设计文档（design-docs）
 
 每份设计稿须输出：
-1. 页面流（含异常路径）
+1. 受影响页面流（含真实可达的边界路径）
 2. 现状 → 目标对照
-3. 状态板（4.x 列出的 9 种状态）
+3. §5 状态适用性矩阵，以及本次变化直接影响的状态画面
 4. token 使用清单（显式列出该页面用到的 tokens / 是否新增）
-5. 数据示例清单
+5. 受影响内容类型和边界的数据示例清单
 
 新增 token **禁止**直接写在 design 文档中；须先提交「规范更新」任务，扩展 `tokens.css` + 本文档。
 
@@ -318,9 +305,9 @@ H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认
 | 2 | 行内魔法数字（margin/padding/font-size） | `--space-*` / `--text-*` |
 | 3 | 平行视觉风格（每项目自定义主色/圆角） | 统一 token；如确需差异，扩展 token 而非旁路 |
 | 4 | 动效 > 400ms / bouncy 缓动 | `--motion-*` |
-| 5 | 文案硬编码 | i18n key |
-| 6 | 缺状态（loading/empty/error） | 状态完备清单走查 |
-| 7 | 引入新前端框架/状态库 | 走规范更新任务 |
+| 5 | 已启用 i18n 的项目旁路文案真源 | 当前 technology Profile 的 i18n key |
+| 6 | 遗漏本次变化可达且用户需要处理的状态 | §5 适用性走查 |
+| 7 | 未更新 technology/Profile 就引入新框架或状态库 | 先更新项目配置与组件约束 |
 | 8 | 构建依赖原型（HTML 原型必须纯静态） | 内联 CSS/JS |
 
 ---
@@ -328,8 +315,8 @@ H5 基线：`375px` 竖屏；Dashboard 基线：`1280px`。Mobile First：默认
 ## 10. 与 Harness 流程的关系
 
 - `design` 任务：`task-rules.yml` `specs: [DESIGN.md, UI_DESIGN_SYSTEM.md]`；产出 `docs/design-docs/*` + 原型；token 用量须列明（§8.3）。
-- `frontend-design` 任务：`specs: [TECH_FRONTEND.md, UI_DESIGN_SYSTEM.md]`；技术方案必须显式继承本文档第 1 章栈与第 8 章工程落地。
+- `frontend-design` 任务：`specs: [TECH_FRONTEND.md, UI_DESIGN_SYSTEM.md]`；技术方案只继承与当前 `config/technology.yml` Profile 匹配的栈和工程落地规则。
 - `code` 任务（前端）：`specs-frontend: [CODING_FRONTEND.md, UI_DESIGN_SYSTEM.md]`；acceptance 包含 `uv run --project .harness/runtime harness ui-tokens-lint --ci`，机械执行 §9 红线（hex / rgb / 裸 palette / 魔法 px）。
-- `code-review` / `product-acceptance`：将 token 使用、状态完备性纳入评分维度（quality_score.py Step 6 的 prototype-parity 已隐式覆盖；token-lint 评分维度在 v2 接入）。
+- `code-review` / `product-acceptance`：将 token 使用与适用状态覆盖纳入评分维度（quality_score.py Step 6 的 prototype-parity 已隐式覆盖；token-lint 评分维度在 v2 接入）。
 
 **规范更新流程**：本文档（含 §2 token 表 / §5 状态 ID / §1 栈基线）的任何修改需走"规范更新"任务，同时变更 `templates/ui/tokens.css` 与本文档；变更后 `mai-harness sync` 将携带新版本进入下游项目。

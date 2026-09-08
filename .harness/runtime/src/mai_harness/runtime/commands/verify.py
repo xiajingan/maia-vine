@@ -16,6 +16,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+from mai_harness.runtime.domain.sprint_context import validate_user_stories
 from mai_harness.runtime.infrastructure.core.paths import PATHS, HarnessPaths
 from mai_harness.runtime.infrastructure.core.process import ManagedProcess
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
@@ -47,6 +48,22 @@ def endpoint_in_use(url: str) -> bool:
             return True
     except OSError:
         return False
+
+
+def validated_origin(value: str, label: str) -> str:
+    """Accept only an explicit HTTP(S) origin suitable for a verification target."""
+    parsed = urlparse(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError(f"{label} 必须是无凭据的 HTTP(S) origin")
+    return value.rstrip("/")
 
 
 def config_defaults() -> dict:
@@ -130,6 +147,8 @@ class Verification:
             config_path,
             self.root / self.config["ENV_FILE"],
             self.root / self.config["COMPOSE_FILE"],
+            self.root / "USER_STORIES.md",
+            self.root / "ARCHITECTURE.md",
             self.root / "package.json",
             self.root / "pnpm-lock.yaml",
         ]
@@ -155,7 +174,19 @@ class Verification:
             except ValueError:
                 pass
         before = self.failures
+        stories = self.root / "USER_STORIES.md"
+        if stories.is_file():
+            story_errors = validate_user_stories(stories)
+            if story_errors:
+                for error in story_errors:
+                    self.fail(f"Requirements: {error}")
+            else:
+                self.pass_("Requirements: USER_STORIES.md 全量校验通过")
+        elif (self.root / "config/harness.yml").is_file():
+            self.fail("Requirements: 缺少 USER_STORIES.md 需求真源")
         if (self.root / "config/harness.yml").is_file():
+            if not (self.root / "ARCHITECTURE.md").is_file():
+                self.fail("Architecture: 缺少 ARCHITECTURE.md 架构真源")
             paths = HarnessPaths.detect(project=self.root)
             try:
                 harness = load_harness_config(force=True, path=self.root / "config/harness.yml")
@@ -452,9 +483,19 @@ def main() -> int:
     parser.add_argument("--no-start", action="store_true")
     parser.add_argument("--skip-if-recent", type=int, default=0)
     parser.add_argument("--purge", action="store_true")
+    parser.add_argument("--api-url")
+    parser.add_argument("--web-url")
     args = parser.parse_args()
     root = Path.cwd()
-    verification = Verification(load_config(args.config), root, args.report_dir)
+    config = load_config(args.config)
+    try:
+        if args.api_url is not None:
+            config["API_URL"] = validated_origin(args.api_url, "--api-url")
+        if args.web_url is not None:
+            config["WEB_URL"] = validated_origin(args.web_url, "--web-url")
+    except ValueError as exc:
+        parser.error(str(exc))
+    verification = Verification(config, root, args.report_dir)
     phases = args.phases or ["all"]
 
     def should_run(phase: str) -> bool:

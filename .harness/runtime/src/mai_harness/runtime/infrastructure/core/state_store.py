@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
+import socket
 import threading
 import time
 import uuid
@@ -34,14 +36,35 @@ class StateStore:
         deadline = time.monotonic() + timeout_seconds
         owner = uuid.uuid4().hex
         ttl_seconds = max(timeout_seconds * 6, 60)
+        hostname = socket.gethostname()
         while True:
+            pending_path = lock_path.with_name(f".{lock_path.name}.{owner}.pending")
             try:
-                lock_path.mkdir(mode=0o700)
-                (lock_path / "owner.json").write_text(
-                    json.dumps({"owner": owner, "ttl_seconds": ttl_seconds}), encoding="utf-8"
+                pending_path.mkdir(mode=0o700)
+                (pending_path / "owner.json").write_text(
+                    json.dumps(
+                        {
+                            "owner": owner,
+                            "pid": os.getpid(),
+                            "hostname": hostname,
+                            "acquired_at": time.time(),
+                            "ttl_seconds": ttl_seconds,
+                        }
+                    ),
+                    encoding="utf-8",
                 )
+                os.rename(pending_path, lock_path)
                 break
-            except FileExistsError:
+            except OSError as exc:
+                if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                    raise
+                (pending_path / "owner.json").unlink(missing_ok=True)
+                try:
+                    pending_path.rmdir()
+                except FileNotFoundError:
+                    pass
+                if self._recover_abandoned_directory_lock(lock_path, hostname):
+                    continue
                 if time.monotonic() >= deadline:
                     raise StateLockTimeout(
                         f"状态锁超时: {lock_path}；禁止自动抢占，请确认持有者状态后执行受控恢复"
@@ -77,16 +100,49 @@ class StateStore:
                 except FileNotFoundError:
                     pass
 
+    @staticmethod
+    def _recover_abandoned_directory_lock(lock_path: Path, hostname: str) -> bool:
+        """Recover only an expired lock whose local owner process is provably gone."""
+        try:
+            metadata = json.loads((lock_path / "owner.json").read_text(encoding="utf-8"))
+            ttl_seconds = float(metadata["ttl_seconds"])
+            pid = int(metadata["pid"])
+            lock_host = str(metadata["hostname"])
+            age = time.time() - lock_path.stat().st_mtime
+        except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+            return False
+        if age <= ttl_seconds or lock_host != hostname:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pass
+        except (PermissionError, OSError):
+            return False
+        else:
+            return False
+        quarantine = lock_path.with_name(f"{lock_path.name}.abandoned.{uuid.uuid4().hex}")
+        try:
+            os.replace(lock_path, quarantine)
+        except (FileNotFoundError, OSError):
+            return False
+        (quarantine / "owner.json").unlink(missing_ok=True)
+        try:
+            quarantine.rmdir()
+        except OSError:
+            pass
+        return True
+
     def acquire(self, relative: str | Path, owner: str, ttl_seconds: int, *, now: float | None = None) -> bool:
         """Atomically acquire an owner lock, recovering an expired lock."""
-        lock_path = self.path(relative)
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        timestamp = time.time() if now is None else now
-        payload = json.dumps(
-            {"owner": owner, "acquired_at": timestamp, "ttl_seconds": ttl_seconds},
-            ensure_ascii=False,
-        ).encode()
-        for _ in range(3):
+        with self.lock(f"{relative}.lease-mutation"):
+            lock_path = self.path(relative)
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = time.time() if now is None else now
+            payload = json.dumps(
+                {"owner": owner, "acquired_at": timestamp, "ttl_seconds": ttl_seconds},
+                ensure_ascii=False,
+            ).encode()
             try:
                 descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 try:
@@ -100,27 +156,30 @@ class StateStore:
                     acquired = float(current.get("acquired_at", 0))
                     ttl = int(current.get("ttl_seconds", ttl_seconds))
                 except (OSError, ValueError, json.JSONDecodeError):
-                    acquired, ttl = 0, 0
+                    current, acquired, ttl = {}, 0, 0
                 if timestamp - acquired < ttl:
                     return current.get("owner") == owner
+                lock_path.unlink()
+                descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 try:
-                    lock_path.unlink()
-                except FileNotFoundError:
-                    continue
-        return False
+                    os.write(descriptor, payload)
+                finally:
+                    os.close(descriptor)
+                return True
 
     def release(self, relative: str | Path, owner: str, *, force: bool = False) -> bool:
-        lock_path = self.path(relative)
-        try:
-            current = json.loads(lock_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
+        with self.lock(f"{relative}.lease-mutation"):
+            lock_path = self.path(relative)
+            try:
+                current = json.loads(lock_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return True
+            except json.JSONDecodeError:
+                current = {}
+            if not force and current.get("owner") != owner:
+                return False
+            lock_path.unlink(missing_ok=True)
             return True
-        except json.JSONDecodeError:
-            current = {}
-        if not force and current.get("owner") != owner:
-            return False
-        lock_path.unlink(missing_ok=True)
-        return True
 
     def read_json(self, relative: str | Path, default: Any = None) -> Any:
         target = self.path(relative)

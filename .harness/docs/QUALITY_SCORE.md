@@ -58,19 +58,12 @@ Library 工程的质量评分只接受 clean、已提交的源码，并在同名
 
 ### 性能基线
 
-从技术方案 API 定义 + PRD 非功能性需求生成：
-
-| 类型 | 参考上限 |
-|------|---------|
-| AI 推理接口 | P99 < 8s |
-| SSR 渲染 | P99 < 500ms |
-| 高频上报 | P99 < 200ms |
-| 前端 LCP | < 2.5s（Web Vitals Good） |
-| 前端 FCP | < 1.8s |
-| 前端 CLS | < 0.1 |
+性能目标只从 `ARCHITECTURE.md` 的适用 SLO、本次 PRD 和技术方案读取。Harness 不为 AI、SSR、上报或前端页面提供跨项目统一数字；缺少容量、设备、网络和业务依据时，不得临时套用示例阈值，也不得为了生成性能章节引入缓存或队列。
+默认 `quality.dimensions.performance.applies_to: []`。项目声明性能目标后才显式启用适用工程类型并登记 producer；未启用时该维度按 N/A 处理，不要求生成性能产物。
 
 Backend 不再依赖固定文件名存在性。项目在 `config/harness.yml#quality.performance_evidence`
 登记 producer 命令、JSON artifact、身份路径、测试节点、计数/零值不变量与分类集。
+启用 producer 时，项目还必须依据 Architecture/PRD 显式填写最小时长、并发、P99、容差和超时；默认值均为空，Harness 不提供 `300s/50/P99 8s` 等跨项目答案。
 `quality-score` 在本轮内删除 stale artifact、执行 producer，并重复校验：
 
 - producer 退出码与精确 JSON schema；
@@ -89,6 +82,13 @@ producer 未登记或证据无效时，backend 不会因 `k6-results.json` / `li
 > spec 数量、spec 覆盖率仅作为底层运行/排障辅助信息，**不进入质量评分**。
 
 E2E 评分基于 Playwright 执行测试用例的结果，按 **case** 归因：
+
+项目若显式启用 `quality.action_evidence.execution_policy.execution_evidence_version: 2`，
+scorer 会同时消费 `e2e_artifact`。只有命令成功、证据有效、`passed=true`、至少一条
+executed case、runner 调用数大于零且计数一致时才授予 E2E 分。受控零执行必须声明允许的
+profile 与 `not_applicable` / `deferred` / `blocked` outcome，保持 `evidenceValid=true`、
+`passed=false` 并给出非空原因；报告会透明展示四分区和 runner 计数，但不会显示 `0/0 PASS`
+或授予 E2E 分。未 opt-in 的项目继续使用严格 v1 行为。
 
 **当前迭代 case**（全量执行）：
 - 加载 `docs/test-cases/**/*.yml` 中 `introduced_in` 或 `last_modified_in` 指向当前 Sprint 的用例（legacy `sprint` 字段迁移期兼容）

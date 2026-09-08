@@ -10,11 +10,36 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from mai_harness.runtime.domain.sprint_context import table_rows
+from mai_harness.runtime.application.integration_contract import (
+    delivery_identity,
+    integration_contract,
+    protected_worktree_digest,
+)
+from mai_harness.runtime.domain.document_registry import (
+    REGISTRY_TASKS,
+    promote_task_registry,
+    task_registry_publication,
+    validate_task_registry,
+    validate_unpublished_task_registry,
+)
+from mai_harness.runtime.domain.sprint_context import (
+    planning_contract_digest,
+    sprint_header,
+    sprint_planning_contract,
+    sprint_source_requirements_digest,
+    sprint_structure_digest,
+    sprint_structure_digest_bytes,
+    sprint_uses_story_requirements,
+    table_rows,
+    task_dependency_graph,
+    transitive_task_dependencies,
+    validate_product_trace,
+)
 from mai_harness.runtime.domain.task_protocol import execution_protocol, review_protocol
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 from mai_harness.runtime.infrastructure.harness_config import load_harness_config
+from mai_harness.runtime.infrastructure.utils import load_yaml
 
 
 def _digest_bytes(value: bytes) -> str:
@@ -35,6 +60,13 @@ def _safe_name(sprint: str, task_type: str) -> str:
 AGENT_INVOCATION = re.compile(r"^[a-z0-9][a-z0-9._:-]{7,191}$")
 AGENT_ROLES = {"plan", "exec", "review"}
 PR_TASK_TYPES = {"pr", "library-pr"}
+ARCHITECTURE_BOUND_TASK_TYPES = {
+    "product",
+    "design",
+    "backend-design",
+    "frontend-design",
+    "library-design",
+}
 PR_GIT_POLICY_VERSION = 1
 
 
@@ -70,37 +102,19 @@ def _is_direct_child(root: Path, parent: str, child: str) -> bool:
 
 
 def _sprint_structure_digest(path: Path) -> str:
-    """Hash a Sprint plan while ignoring mutable task status cells."""
-    return _sprint_structure_digest_bytes(path.read_bytes())
+    """Compatibility wrapper around the domain's canonical structure digest."""
+    return sprint_structure_digest(path)
 
 
 def _sprint_structure_digest_bytes(value: bytes) -> str:
-    lines = value.decode("utf-8").splitlines()
-    status_index = -1
-    normalized = []
-    for line in lines:
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")] if line.lstrip().startswith("|") else []
-        if cells and any(cell.lower() in {"status", "状态"} for cell in cells):
-            status_index = next(index for index, cell in enumerate(cells) if cell.lower() in {"status", "状态"})
-        elif status_index >= 0 and cells and status_index < len(cells):
-            if all(set(cell) <= {"-", ":"} for cell in cells):
-                pass
-            else:
-                cells[status_index] = "<status>"
-                line = "| " + " | ".join(cells) + " |"
-        elif status_index >= 0 and not cells:
-            status_index = -1
-        normalized.append(line)
-    return _digest_bytes(("\n".join(normalized) + "\n").encode())
+    return sprint_structure_digest_bytes(value)
 
 
 def _pre_archive_close_plan(sprint_path: Path, task_id: str, task_type: str) -> bytes | None:
     """Reverse the only mutations allowed while a close task archives its plan."""
-
     if task_type not in {"sprint-close", "library-close"} or sprint_path.parent.name != "completed":
         return None
-    active_path = sprint_path.parent.parent / "active" / sprint_path.name
-    if active_path.exists():
+    if (sprint_path.parent.parent / "active" / sprint_path.name).exists():
         return None
     lines = sprint_path.read_bytes().decode("utf-8").splitlines(keepends=True)
     header_count = 0
@@ -134,27 +148,24 @@ def _pre_archive_close_plan(sprint_path: Path, task_id: str, task_type: str) -> 
         raw_cells[status_index] = " pending "
         lines[index] = "|" + "|".join(raw_cells) + "|" + ending
         changed += 1
-    if changed != 1:
-        return None
-    return "".join(lines).encode()
+    return "".join(lines).encode() if changed == 1 else None
 
 
 def _matches_controlled_close_archive(
     sprint_path: Path,
     task_id: str,
     task_type: str,
-    current: dict[str, str],
-    expected: dict[str, str],
+    current: dict[str, Any],
+    expected: dict[str, Any],
 ) -> bool:
     source = _pre_archive_close_plan(sprint_path, task_id, task_type)
     if source is None:
         return False
-    archived_expected = {
+    return current == {
         **expected,
         "sprint_sha256": _digest_bytes(source),
         "sprint_structure_sha256": _sprint_structure_digest_bytes(source),
     }
-    return current == archived_expected
 
 
 def _context(
@@ -164,6 +175,7 @@ def _context(
     context = {
         "sprint_sha256": _digest_bytes(sprint_path.read_bytes()),
         "sprint_structure_sha256": _sprint_structure_digest(sprint_path),
+        "planning_contract_sha256": planning_contract_digest(sprint_path),
         "rules_sha256": _digest_bytes(rules_path.read_bytes()),
         "task_sha256": _digest_json(task),
         "git_sha": _git_sha(root),
@@ -171,10 +183,59 @@ def _context(
         "task_type": task_type,
         "facets": facets,
         "acceptance_sha256": _digest_json(acceptance_records(task, task_type, facets)),
+        "task_row_sha256": _task_row_digest(sprint_path, task_id, task_type),
+        "upstream_inputs": _upstream_inputs(root, sprint_path, rules_path, task_id, task_type),
     }
+    contract = sprint_planning_contract(sprint_path)
+    if sprint_uses_story_requirements(sprint_header(sprint_path).get("sprint_type", ""), contract):
+        context["requirements_sha256"] = sprint_source_requirements_digest(
+            root / "USER_STORIES.md", sprint_path, contract.get("source_stories")
+        )
+    if task_type in ARCHITECTURE_BOUND_TASK_TYPES:
+        architecture = root / "ARCHITECTURE.md"
+        if not architecture.is_file():
+            raise ValueError(f"{task_type} 任务缺少架构输入: {architecture}")
+        context["architecture_sha256"] = _digest_bytes(architecture.read_bytes())
     if task_type in PR_TASK_TYPES:
         context["git_branch"] = _git_branch(root)
+    if task.get("execution_contract") == "integration-v1":
+        output = str((task.get("outputs") or {}).get("path", "")).strip().rstrip("/")
+        identity, identity_errors = delivery_identity(root, sprint_path.stem)
+        context["execution_contract"] = integration_contract(sprint_path, task_id, task)
+        context["delivery_identity"] = identity
+        context["delivery_identity_errors"] = identity_errors
+        context["protected_worktree_sha256"] = protected_worktree_digest(
+            root, [Path(output) / task_id] if output else []
+        )
     return context
+
+
+def _task_row_digest(sprint_path: Path, task_id: str, task_type: str) -> str | None:
+    matches = [
+        {key: value for key, value in row.items() if key not in {"status", "状态"}}
+        for row in table_rows(sprint_path.read_text(encoding="utf-8"))
+        if row.get("id") == task_id and (row.get("类型") or row.get("type")) == task_type
+    ]
+    return _digest_json(matches[0]) if len(matches) == 1 else None
+
+
+def _upstream_context_matches(root: Path, current: Any, expected: dict[str, Any]) -> bool:
+    """Validate immutable task inputs while allowing normal descendant commits and unrelated plan rows."""
+    if not isinstance(current, dict):
+        return False
+    ignored = {"sprint_sha256", "sprint_structure_sha256", "git_sha"}
+    if any(current.get(field) != expected.get(field) for field in set(expected) - ignored):
+        return False
+    recorded_head = str(current.get("git_sha", ""))
+    current_head = str(expected.get("git_sha", ""))
+    if recorded_head == current_head:
+        return True
+    if recorded_head in {"", "unversioned"} or current_head in {"", "unversioned"}:
+        return False
+    outcome = execute(
+        CommandSpec.argv_command(("git", "merge-base", "--is-ancestor", recorded_head, current_head), cwd=root)
+    )
+    return outcome.ok
 
 
 def _matches_registered_pr_head(state: dict[str, Any], expected: dict[str, Any], task_type: str) -> bool:
@@ -184,7 +245,7 @@ def _matches_registered_pr_head(state: dict[str, Any], expected: dict[str, Any],
     lineage = state.get("git_lineage")
     if not isinstance(current, dict) or not isinstance(lineage, dict):
         return False
-    static_fields = set(expected) - {"git_sha"}
+    static_fields = set(expected) - {"git_sha", "sprint_sha256"}
     if any(current.get(field) != expected.get(field) for field in static_fields):
         return False
     return (
@@ -197,6 +258,121 @@ def _matches_registered_pr_head(state: dict[str, Any], expected: dict[str, Any],
 
 def _state(root: Path, sprint_path: Path, task_id: str) -> tuple[StateStore, str]:
     return StateStore(root / ".harness/state/tasks"), _safe_name(sprint_path.stem, task_id)
+
+
+def current_attempt_state_path(root: Path, sprint_path: Path, task_id: str) -> Path:
+    """Return the canonical state record used to bind downstream receipts."""
+    store, name = _state(root, sprint_path, task_id)
+    return store.path(name)
+
+
+def _stage_tasks(stage: Any) -> list[str]:
+    values = stage.get("tasks", []) if isinstance(stage, dict) else stage
+    return [str(value) for value in values] if isinstance(values, list) else []
+
+
+def _current_file_digest(root: Path, relative: Any) -> str:
+    if not isinstance(relative, str) or not relative:
+        return "missing"
+    candidate = Path(relative)
+    path = (root / candidate).resolve()
+    if candidate.is_absolute() or ".." in candidate.parts or not path.is_relative_to(root.resolve()):
+        return "invalid"
+    return _digest_bytes(path.read_bytes()) if path.is_file() else "missing"
+
+
+def _upstream_inputs(
+    root: Path, sprint_path: Path, rules_path: Path, task_id: str, task_type: str
+) -> list[dict[str, Any]]:
+    """Bind a task attempt to the exact reviewed attempts it consumes."""
+    try:
+        rules = load_yaml(rules_path)
+    except (OSError, ValueError):
+        return []
+    sprint_type = sprint_header(sprint_path).get("sprint_type", "")
+    stages = (rules.get("sprint_type_sequences") or {}).get(sprint_type) or []
+    contract = sprint_planning_contract(sprint_path)
+    rows = table_rows(sprint_path.read_text(encoding="utf-8"))
+    if contract.get("planning_contract_version") == 3:
+        graph, dependency_errors = task_dependency_graph(rows)
+        if dependency_errors:
+            return []
+        upstream_ids = transitive_task_dependencies(graph, task_id)
+        upstream_types: set[str] | None = None
+    else:
+        stage_index = next((index for index, stage in enumerate(stages) if task_type in _stage_tasks(stage)), -1)
+        if stage_index <= 0:
+            return []
+        upstream_ids = set()
+        upstream_types = {name for stage in stages[:stage_index] for name in _stage_tasks(stage)}
+    projections = rules.get("task_input_projections") or {}
+    projected_types = projections.get(task_type) if isinstance(projections, dict) else None
+    if isinstance(projected_types, list) and projected_types:
+        # A projection is activated only when an applicable preferred producer
+        # exists in the actual dependency closure. This preserves explicit
+        # maintenance/hotfix flows that intentionally have no design task while
+        # preventing Coding from consuming PRD/design beside a technical design.
+        eligible_ids = {
+            row.get("id", "")
+            for row in rows
+            if (row.get("类型") or row.get("type") or "") in projected_types
+            and (
+                row.get("id", "") in upstream_ids
+                if upstream_types is None
+                else (row.get("类型") or row.get("type") or "") in upstream_types
+            )
+        }
+        if eligible_ids:
+            if upstream_types is None:
+                upstream_ids = eligible_ids
+            else:
+                upstream_types = set(projected_types)
+    bindings: list[dict[str, Any]] = []
+    for row in rows:
+        source_type = row.get("类型") or row.get("type") or ""
+        source_id = row.get("id", "")
+        if (
+            not source_id
+            or (upstream_types is not None and source_type not in upstream_types)
+            or (upstream_types is None and source_id not in upstream_ids)
+        ):
+            continue
+        store, name = _state(root, sprint_path, source_id)
+        try:
+            state = store.read_json(name, {})
+        except (OSError, ValueError):
+            state = {}
+        review = state.get("review") if isinstance(state, dict) else None
+        review = review if isinstance(review, dict) else {}
+        artifacts = review.get("artifacts") if isinstance(review.get("artifacts"), list) else []
+        bindings.append(
+            {
+                "task_id": source_id,
+                "task_type": source_type,
+                "task_status": row.get("状态") or row.get("status") or "",
+                "run_id": state.get("run_id") if isinstance(state, dict) else None,
+                "attempt": state.get("attempt") if isinstance(state, dict) else None,
+                "review": {
+                    "decision": review.get("decision"),
+                    "report": review.get("report"),
+                    "report_sha256": review.get("report_sha256"),
+                    "current_report_sha256": _current_file_digest(root, review.get("report")),
+                    "artifacts": sorted(
+                        (
+                            {
+                                "path": item.get("path"),
+                                "sha256": item.get("sha256"),
+                                "current_sha256": _current_file_digest(root, item.get("path")),
+                            }
+                            for item in artifacts
+                            if isinstance(item, dict)
+                        ),
+                        key=lambda item: str(item.get("path", "")),
+                    ),
+                },
+            }
+        )
+    return bindings
 
 
 def _run_dir(root: Path, sprint_path: Path, task_id: str, attempt: int) -> Path:
@@ -354,15 +530,18 @@ def load_current_attempt(
     expected = _context(root, sprint_path, rules_path, task_id, task_type, task)
     current = state.get("context")
     pr_identity_mismatch = task_type in PR_TASK_TYPES and not _matches_registered_pr_head(state, expected, task_type)
-    ordinary_identity_mismatch = (
-        task_type not in PR_TASK_TYPES
-        and current != expected
+    comparable_fields = set(expected) - {"sprint_sha256"}
+    close_identity_mismatch = task_type in {"sprint-close", "library-close"} and (
+        current != expected
         and not (
             isinstance(current, dict)
             and _matches_controlled_close_archive(sprint_path, task_id, task_type, current, expected)
         )
     )
-    if pr_identity_mismatch or ordinary_identity_mismatch:
+    ordinary_identity_mismatch = task_type not in PR_TASK_TYPES | {"sprint-close", "library-close"} and (
+        not isinstance(current, dict) or any(current.get(field) != expected.get(field) for field in comparable_fields)
+    )
+    if pr_identity_mismatch or close_identity_mismatch or ordinary_identity_mismatch:
         raise ValueError("任务输入已变化；必须重新运行 preflight gate 创建新轮次")
     return state
 
@@ -427,6 +606,26 @@ def require_ready_attempt(
         raise ValueError("任务 Preflight 尚未通过，拒绝执行 Action")
     if state.get("agent_policy_version") != 1 or not isinstance(state.get("agent_invocations"), dict):
         raise ValueError("当前轮次早于 Agent 隔离策略；必须重新运行 Preflight 创建新 attempt")
+    return state
+
+
+def require_planned_attempt(
+    root: Path, sprint_path: Path, rules_path: Path, task_id: str, task_type: str, task: dict[str, Any]
+) -> dict[str, Any]:
+    """Require the current agent task to have a bound Plan invocation and materialized plan."""
+
+    state = require_ready_attempt(root, sprint_path, rules_path, task_id, task_type, task)
+    binding = (state.get("agent_invocations") or {}).get("plan")
+    expected_invocation = agent_invocation_id(str(state.get("run_id", "")), "plan")
+    plan = (root / str(state.get("plan", ""))).resolve()
+    if (
+        not isinstance(binding, dict)
+        or binding.get("invocation_id") != expected_invocation
+        or not plan.is_relative_to(root.resolve())
+        or not plan.is_file()
+        or not plan.read_text(encoding="utf-8").strip()
+    ):
+        raise ValueError("受控 Action 必须在当前 attempt 的 Plan Agent 完成计划后执行")
     return state
 
 
@@ -563,10 +762,12 @@ def validate_failed_action_evidence(
     if not isinstance(context, dict):
         return [f"上游失败 Action context 格式非法: {task_id} ({task_type})"]
     expected_context = _context(root, sprint_path, rules_path, task_id, task_type, task)
-    context_fields = ("task_id", "task_type", "task_sha256", "rules_sha256", "git_sha", "sprint_structure_sha256")
-    if any(context.get(field) != expected_context.get(field) for field in context_fields):
+    if not _upstream_context_matches(root, context, expected_context):
         return [f"上游失败 Action 证据不存在: {task_id} ({task_type})"]
-    phases = state.get("phases") or {}
+    raw_phases = state.get("phases")
+    phases = raw_phases if isinstance(raw_phases, dict) else {}
+    if raw_phases is not None and not isinstance(raw_phases, dict):
+        return [f"上游失败 Action phases 格式非法: {task_id} ({task_type})"]
     phase = (phases.get("execute") or {}) if isinstance(phases, dict) else {}
     if not isinstance(phase, dict) or phase.get("action") != expected_action:
         return [f"上游失败 Action 类型不匹配: {phase.get('action', '缺失')} != {expected_action}"]
@@ -655,6 +856,40 @@ def record_review(
         raise ValueError(f"Review 产物未覆盖任务声明输出目录: {', '.join(map(str, declared_roots))}")
     if decision == "pass" and declared_index and declared_index not in artifact_paths:
         raise ValueError(f"Review 必须绑定任务声明索引: {declared_index}")
+    contract = sprint_planning_contract(sprint_path)
+    publish_registry = False
+    if decision != "pass" and declared_index and task_type in REGISTRY_TASKS:
+        registry_errors = validate_unpublished_task_registry(
+            root, sprint_path.stem, task_id, state["run_id"], task_type
+        )
+        if registry_errors:
+            raise ValueError("未发布文档作用域索引门禁失败:\n- " + "\n- ".join(registry_errors))
+    if decision == "pass" and declared_index and task_type in REGISTRY_TASKS:
+        registry_errors = validate_task_registry(
+            root,
+            sprint_path.stem,
+            task_id,
+            state["run_id"],
+            task_type,
+            artifact_paths,
+            contract.get("source_stories"),
+            contract.get("requirement_mode"),
+        )
+        if registry_errors:
+            raise ValueError("文档作用域索引门禁失败:\n- " + "\n- ".join(registry_errors))
+        publish_registry = True
+    if (
+        decision == "pass"
+        and task_type == "product"
+        and sprint_uses_story_requirements(sprint_header(sprint_path).get("sprint_type", ""), contract)
+    ):
+        trace_errors = validate_product_trace(
+            [root / path for path in artifact_paths],
+            contract.get("source_stories"),
+            root / "ARCHITECTURE.md",
+        )
+        if trace_errors:
+            raise ValueError("PRD 需求追溯门禁失败:\n- " + "\n- ".join(trace_errors))
     store, name = _state(root, sprint_path, task_id)
 
     def update(current: Any) -> dict[str, Any]:
@@ -671,18 +906,82 @@ def record_review(
         }
         return current
 
-    store.update_json(name, update, {})
+    if publish_registry:
+        directory_name = REGISTRY_TASKS[task_type][0]
+        index_path = root / "docs" / directory_name / "index.md"
+        registry_lock = StateStore(root / ".harness/state/registry-publish")
+        with registry_lock.lock(f"{directory_name}.publish"):
+            registry_errors = validate_task_registry(
+                root,
+                sprint_path.stem,
+                task_id,
+                state["run_id"],
+                task_type,
+                artifact_paths,
+                contract.get("source_stories"),
+                contract.get("requirement_mode"),
+            )
+            if registry_errors:
+                raise ValueError("文档作用域索引门禁失败:\n- " + "\n- ".join(registry_errors))
+            original_index = index_path.read_text(encoding="utf-8")
+            publication_path: Path | None = None
+            try:
+                promote_task_registry(root, sprint_path.stem, task_id, state["run_id"], task_type)
+                publication = task_registry_publication(root, sprint_path.stem, task_id, state["run_id"], task_type)
+                publication["recorded_at"] = datetime.now(UTC).isoformat()
+                publication_name = f"{sprint_path.stem}--{task_id}--{state['run_id']}.json"
+                publication_path = StateStore(root / ".harness/state/document-registry/publications").write_json(
+                    publication_name, publication
+                )
+                artifact_records = [
+                    {"path": path.as_posix(), "sha256": _digest_bytes((root / path).read_bytes())}
+                    for path in artifact_paths
+                    if path != declared_index
+                ]
+                artifact_records.append(
+                    {
+                        "path": publication_path.relative_to(root).as_posix(),
+                        "sha256": _digest_bytes(publication_path.read_bytes()),
+                    }
+                )
+                store.update_json(name, update, {})
+            except Exception:
+                StateStore(index_path.parent).write_text(index_path.name, original_index)
+                if publication_path is not None:
+                    publication_path.unlink(missing_ok=True)
+                raise
+    else:
+        store.update_json(name, update, {})
     _record_finding_ledger(root, sprint_path, task_id, state, review_document)
     return store.path(name)
 
 
 def validate_attempt(
-    root: Path, sprint_path: Path, rules_path: Path, task_id: str, task_type: str, task: dict[str, Any]
+    root: Path,
+    sprint_path: Path,
+    rules_path: Path,
+    task_id: str,
+    task_type: str,
+    task: dict[str, Any],
+    *,
+    upstream: bool = False,
 ) -> list[str]:
-    try:
-        state = load_current_attempt(root, sprint_path, rules_path, task_id, task_type, task)
-    except ValueError as exc:
-        return [str(exc)]
+    if upstream:
+        store, name = _state(root, sprint_path, task_id)
+        try:
+            state = store.read_json(name, {})
+        except (OSError, ValueError) as exc:
+            return [f"任务执行轮次损坏: {exc}"]
+        expected = _context(root, sprint_path, rules_path, task_id, task_type, task)
+        if not isinstance(state, dict) or state.get("schema_version") != 3:
+            return ["任务执行轮次不存在；先运行 preflight gate"]
+        if not _upstream_context_matches(root, state.get("context"), expected):
+            return ["任务相关输入、规划契约或 Git lineage 已变化；必须重新运行该任务"]
+    else:
+        try:
+            state = load_current_attempt(root, sprint_path, rules_path, task_id, task_type, task)
+        except ValueError as exc:
+            return [str(exc)]
     errors: list[str] = []
     if state.get("status") != "ready":
         errors.append("任务 Preflight 尚未通过")
@@ -706,20 +1005,40 @@ def validate_attempt(
         )
         if len(invocation_ids) != len(set(invocation_ids)):
             errors.append("Plan/Exec/Review Agent invocation 必须相互独立")
-    phases = state.get("phases") or {}
+    raw_phases = state.get("phases")
+    phases = raw_phases if isinstance(raw_phases, dict) else {}
+    if raw_phases is not None and not isinstance(raw_phases, dict):
+        errors.append("任务 phases 状态格式非法")
     for phase, action in (
         ("entry", task.get("entry_action")),
         ("execute", (task.get("execute") or {}).get("action")),
     ):
-        evidence = phases.get(phase) or {}
+        raw_evidence = phases.get(phase)
+        evidence = raw_evidence if isinstance(raw_evidence, dict) else {}
+        if raw_evidence is not None and not isinstance(raw_evidence, dict):
+            errors.append(f"{phase} Action 证据格式非法")
         if action and (evidence.get("returncode") != 0 or evidence.get("action") != action):
             errors.append(f"缺少当前轮次成功的 {phase} action 证据: {action}")
-        for artifact in evidence.get("artifacts") or []:
+        phase_artifacts = evidence.get("artifacts") or []
+        if not isinstance(phase_artifacts, list) or not all(isinstance(item, dict) for item in phase_artifacts):
+            errors.append(f"{phase} Action artifacts 格式非法")
+            phase_artifacts = []
+        for artifact in phase_artifacts:
             path = root / artifact.get("path", "")
             if not path.is_file() or _digest_bytes(path.read_bytes()) != artifact.get("sha256"):
                 errors.append(f"{phase} Action 产物缺失或已变化: {artifact.get('path', '')}")
-    review = state.get("review") or {}
-    facets = list((state.get("context") or {}).get("facets") or [])
+    raw_review = state.get("review")
+    review = raw_review if isinstance(raw_review, dict) else {}
+    if raw_review is not None and not isinstance(raw_review, dict):
+        errors.append("Review 状态格式非法")
+    context = state.get("context") or {}
+    if not isinstance(context, dict):
+        errors.append("任务 context 状态格式非法")
+        context = {}
+    raw_facets = context.get("facets") or []
+    facets = list(raw_facets) if isinstance(raw_facets, list) else []
+    if not isinstance(raw_facets, list):
+        errors.append("任务 facets 状态格式非法")
     report = root / str(review.get("report", ""))
     if review.get("decision") != "pass":
         errors.append("缺少当前轮次 harness-review PASS 证据")
@@ -727,11 +1046,18 @@ def validate_attempt(
         errors.append("Review report 缺失或已变化")
     elif review.get("acceptance_sha256") != _digest_json(acceptance_records(task, task_type, facets)):
         errors.append("Review 验收条件与当前规则不一致")
-    for artifact in review.get("artifacts") or []:
+    raw_review_artifacts = review.get("artifacts")
+    review_artifacts = raw_review_artifacts if isinstance(raw_review_artifacts, list) else []
+    if "artifacts" in review and (
+        not isinstance(raw_review_artifacts, list) or not all(isinstance(item, dict) for item in raw_review_artifacts)
+    ):
+        errors.append("Review artifacts 状态格式非法")
+        review_artifacts = []
+    for artifact in review_artifacts:
         path = root / str(artifact.get("path", ""))
         if not path.is_file() or _digest_bytes(path.read_bytes()) != artifact.get("sha256"):
             errors.append(f"Review 产物缺失或已变化: {artifact.get('path', '')}")
-    if not review.get("artifacts"):
+    if not review_artifacts:
         errors.append("Review 未绑定实际产物")
     return errors
 
@@ -771,6 +1097,7 @@ def _record_finding_ledger(
                 "finding_key": item["finding_key"],
                 "acceptance_id": item["acceptance_id"],
                 "finding_type": item["finding_type"],
+                "responsible_scope": item.get("responsible_scope"),
                 "quality_attributes": item["quality_attributes"],
                 "violated_invariant": item["violated_invariant"],
                 "status": status,
@@ -851,6 +1178,15 @@ def _validate_review_document(document: Any, decision: str, acceptance: list[dic
             "scope_conflict",
         }:
             raise ValueError("Review finding_type 非法")
+        if item["finding_type"] == "scope_conflict":
+            if item.get("responsible_scope") not in {"story", "product", "design", "technical-design"}:
+                raise ValueError(
+                    "scope_conflict finding 必须声明 responsible_scope: story/product/design/technical-design"
+                )
+            if item.get("scope_relation") not in {"in_scope", "regression"}:
+                raise ValueError("scope_conflict 必须属于当前范围或回归影响")
+        elif "responsible_scope" in item:
+            raise ValueError("只有 scope_conflict finding 可以声明 responsible_scope")
         if item["scope_relation"] not in {"in_scope", "regression", "pre_existing", "out_of_scope"}:
             raise ValueError("Review scope_relation 非法")
         attributes = item["quality_attributes"]
@@ -890,20 +1226,41 @@ def _validate_review_document(document: Any, decision: str, acceptance: list[dic
             or item["scope_relation"] not in {"in_scope", "regression"}
         ):
             raise ValueError("只有范围内的 defect/regression 可以作为 blocking finding")
+        must_block = (
+            item["severity"] in {"critical", "major"}
+            and item["finding_type"] in {"defect", "regression"}
+            and item["scope_relation"] in {"in_scope", "regression"}
+        )
+        if must_block and not item["blocking"]:
+            raise ValueError("范围内或回归的 Critical/Major defect 必须标记为 blocking")
         if item["finding_id"] in finding_ids:
             raise ValueError("Review finding_id 重复")
         if item["finding_key"] in finding_keys:
             raise ValueError("Review finding_key 重复")
         finding_ids.add(item["finding_id"])
         finding_keys.add(item["finding_key"])
-    if decision == "pass" and any(item.get("blocking") for item in findings):
-        raise ValueError("PASS Review 不得包含 blocking finding")
+    if decision == "pass" and any(
+        item.get("scope_relation") in {"in_scope", "regression"}
+        and (
+            item.get("blocking")
+            or item.get("finding_type") in {"evidence_gap", "environment_blocker", "scope_conflict"}
+            or (item.get("severity") in {"critical", "major"} and item.get("finding_type") in {"defect", "regression"})
+        )
+        for item in findings
+    ):
+        raise ValueError("PASS Review 不得包含范围内或回归的阻断缺陷、证据、环境或范围缺口")
     if decision == "fail" and not any(item.get("blocking") for item in findings):
         raise ValueError("FAIL Review 必须包含至少一个 blocking finding")
     if decision == "incomplete" and not (
         any(item.get("status") in {"incomplete", "not-reviewed"} for item in criteria)
         or any(
-            item.get("finding_type") in {"evidence_gap", "environment_blocker", "scope_conflict"} for item in findings
+            item.get("finding_type") in {"evidence_gap", "environment_blocker", "scope_conflict"}
+            and item.get("scope_relation") in {"in_scope", "regression"}
+            for item in findings
         )
     ):
         raise ValueError("INCOMPLETE Review 必须声明证据、环境或范围缺口")
+    if decision == "incomplete" and any(
+        item.get("blocking") and item.get("finding_type") in {"defect", "regression"} for item in findings
+    ):
+        raise ValueError("INCOMPLETE Review 不得包含 blocking defect/regression；应判定 FAIL")
