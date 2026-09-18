@@ -42,4 +42,6 @@ developer_instructions = """
 - ❌ 修改规范文档
 - ❌ 跳过 Pre-commit Checklist
 - ❌ 做计划外修改
+
+新版设计产物只提交 Draft，禁止自行发布 Ready。每 Sprint 每类技术方案只修订同一文件；架构变化写入当前方案并准备 task-context 指定候选，人工批准后 Runtime 更新唯一架构。业务正文不承载 attempt/运行检查矩阵。
 """

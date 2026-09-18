@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from mai_harness.runtime.domain.design_policy import PRODUCT_COLUMNS, PRODUCT_SECTIONS, validate_sections
+
 SPRINT_ID = re.compile(r"^sprint-\d+-[a-z0-9][a-z0-9-]*$")
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 LEGACY_PLANNING_CONTRACT_FIELDS = (
@@ -32,7 +34,7 @@ PLANNING_CONTRACT_FIELDS = (
     *V2_PLANNING_CONTRACT_FIELDS[1:],
 )
 SPRINT_HEADER_FIELDS = ("sprint_type", "base_ref", "base_sha", "branch")
-OPTIONAL_PLANNING_CONTRACT_FIELDS = ("scope_transfer_from",)
+OPTIONAL_PLANNING_CONTRACT_FIELDS = ("scope_transfer_from", "design_governance_version")
 BOOTSTRAP_SPRINT_TYPES = {"feature-sprint", "library-sprint"}
 PLACEHOLDER = re.compile(r"(?i)\b(?:todo|tbd|placeholder)\b|待补|待定|占位|\{[^{}\n]+\}")
 GENERIC_RESULT = re.compile(
@@ -89,7 +91,10 @@ def sprint_planning_contract(path: Path) -> dict[str, Any]:
 
 
 def planning_contract_from_content(content: str) -> dict[str, Any]:
-    return {field: _planning_value(content, field) for field in PLANNING_CONTRACT_FIELDS}
+    contract = {field: _planning_value(content, field) for field in PLANNING_CONTRACT_FIELDS}
+    if re.search(r"(?m)^design_governance_version:", content):
+        contract["design_governance_version"] = _planning_value(content, "design_governance_version")
+    return contract
 
 
 def canonical_planning_contract(path: Path) -> dict[str, Any]:
@@ -386,10 +391,13 @@ def sprint_uses_story_requirements(sprint_type: str, contract: dict[str, Any]) -
     )
 
 
-def validate_product_trace(paths: list[Path], references: Any, architecture_path: Path | None = None) -> list[str]:
+def validate_product_trace(
+    paths: list[Path], references: Any, architecture_path: Path | None = None, *, policy: int = 1
+) -> list[str]:
     """Validate the PRD's canonical scope, trace, translation, and complexity contract."""
     errors: list[str] = []
     rows: list[dict[str, str]] = []
+    new_structure = policy == 2
     for path in paths:
         if path.name == "index.md" or not path.is_file():
             continue
@@ -398,11 +406,35 @@ def validate_product_trace(paths: list[Path], references: Any, architecture_path
         except (OSError, UnicodeDecodeError) as exc:
             errors.append(f"PRD 无法读取: {path}: {exc}")
             continue
+        if policy == 2:
+            errors.extend(validate_sections(content, PRODUCT_SECTIONS, str(path)))
         sections = list(re.finditer(r"(?ms)^#{2,4}\s+最小范围与追溯矩阵\s*$\n?(.*?)(?=^#{1,4}\s+|\Z)", content))
         if len(sections) != 1:
             errors.append(f"PRD 必须且只能声明一个『最小范围与追溯矩阵』章节: {path}")
             continue
-        rows.extend(_first_markdown_table(sections[0].group(1)))
+        parsed = _first_markdown_table(sections[0].group(1))
+        is_new = bool(parsed) and tuple(parsed[0]) == PRODUCT_COLUMNS
+        if policy == 2 and not is_new:
+            errors.append(f"PRD 最小范围与追溯矩阵必须精确包含七列: {' | '.join(PRODUCT_COLUMNS)}")
+        if is_new:
+            new_structure = True
+            parsed = [
+                dict(
+                    row,
+                    **{
+                        "Scope ID": row["ID"],
+                        "模块": row["系统/模块"],
+                        "本次产品行为": row["产品行为"],
+                        "必要性 / 未复用原因": row["必要性/未复用原因"],
+                        "Scope Key": row["ID"],
+                        "页面/功能区域": row["系统/模块"],
+                        "范围动作": "修改",
+                        "转译": "细化",
+                    },
+                )
+                for row in parsed
+            ]
+        rows.extend(parsed)
     if errors:
         return errors
     required_columns = {
@@ -477,7 +509,7 @@ def validate_product_trace(paths: list[Path], references: Any, architecture_path
         complexity_added = bool(complexity) and complexity != "无"
         if not complexity:
             errors.append(f"PRD {scope_id or '范围项'} 新增复杂度必须明确填写『无』或分类项")
-        elif complexity_added:
+        elif complexity_added and not new_structure:
             items = [item.strip() for item in re.split(r"[;；]", complexity) if item.strip()]
             for item in items:
                 match = re.fullmatch(r"([^:：]+)\s*[:：]\s*(.+)", item)

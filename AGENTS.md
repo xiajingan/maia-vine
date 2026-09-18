@@ -22,11 +22,13 @@
 
 | 命令 | 说明 |
 |------|------|
-| `uv run --project .harness/runtime harness run-project-command <name>` | 执行 harness.yml 登记的项目命令；默认覆盖 Python 后端与 TS 前端 |
+| `uv run --project .harness/runtime harness run-project-command <name>` | 执行 harness.yml 登记的项目命令；fullstack 覆盖项目后端与 TS 前端 |
 | `uv run --project .harness/runtime harness verify` | 端到端验证（health + 截图 + 日志 + 指标） |
 | `uv run --project .harness/runtime harness doc-lint` | 文档健康（链接 + 索引 + 新鲜度） |
 | `uv run --project .harness/runtime harness doc-garden` | 手动文档园艺（简明度 + 专业度 + 索引摘要） |
-| `uv run --project .harness/runtime harness worktree create <id>` | 创建隔离工作空间 |
+| `uv run --project .harness/runtime harness sprint init <sprint-N-name> --type <type>` | 从配置的远端基线创建 Sprint 计划与隔离工作空间 |
+| `uv run --project .harness/runtime harness sprint activate <plan>` | 校验并锁定 Sprint 任务结构 |
+| `uv run --project .harness/runtime harness dependency <start|candidate|verify-consumer|complete> ...` | 在消费工程 Sprint 内协调已登记的 Library Provider |
 | `uv run --project .harness/runtime harness sprint-gate <task-type> <sprint-plan-file> --task-id <task-id> --strict` | 任务前置条件校验 |
 | `uv run --project .harness/runtime harness quality-score --sprint <id> --level L1` | 质量评分 |
 | `uv run --project .harness/runtime harness promote test` | Develop → Test 提升 |
@@ -41,7 +43,8 @@
 - Codex 子 Agent 定义位于 `.codex/agents/*.toml`：`harness-plan`、`harness-exec`、`harness-review`。
 - 当用户明确说“开始 Sprint / 规划迭代 / 执行 Sprint / deploy-sprint / 继续当前 Sprint”，或指向 `docs/exec-plans/active/*.md` 要求推进任务时，进入 Sprint 模式。
 - 未进入 Sprint 模式的普通修复、解释、评审、单脚本任务由主线程直接执行；只有用户明确要求“使用子 Agent / 并行 Agent / spawn agents”时才派生 Codex subagents。
-- Sprint 编排必须留在主线程：主线程先运行 Step 0，再按任务四步协议显式 spawn `harness-plan` → `harness-exec` → `harness-review`。
+- Sprint 编排必须留在主线程：先运行 Step 0 和 `task-context`；仅当返回协议需要时，按 `agent_invocations` 为当前 task/attempt/role 分别 spawn 全新 Agent 并绑定 `invocation_id`。禁止用 follow-up 或已有 Agent 执行另一个阶段、任务或轮次；Action/orchestrator 不派生无用 Agent。
+- Sprint 规划先填写机器可校验的交付契约；新工程早期迭代必须广度优先初始化领域框架，每轮都必须有 Boss 可实际观察和判定的结果，独立重构 Sprint 也必须走查接口、数据、流程或行为保持。
 - 子 Agent 只接收边界上下文：任务 ID、任务类型、Sprint 计划路径、上游产物路径、上一步输出原文；不要把整库或整份 docs 粘给子 Agent。
 - `codex exec` 自动化默认只读；需要改文件的脚本应显式使用 `--sandbox workspace-write`，不要使用已废弃的 `--full-auto` 作为默认路径。
 - 网络、跨目录写入、生产部署、密钥读取等高风险操作必须让 Codex 走权限审批，不要要求绕过 sandbox。
@@ -56,13 +59,14 @@
 | 产品设计 / PRD | `.harness/docs/PRODUCT_SENSE.md` | `USER_STORIES.md` |
 | UI 设计 | `.harness/docs/DESIGN.md` | `.harness/docs/UI_DESIGN_SYSTEM.md` + 关联 PRD |
 | 后端技术方案 | `.harness/docs/TECH_BACKEND.md` | `ARCHITECTURE.md` |
+| Library 公共包技术方案 | `.harness/docs/TECH_LIBRARY.md` | `ARCHITECTURE.md` + `.harness/docs/ASSIGNMENTS.md` |
 | 前端技术方案 | `.harness/docs/TECH_FRONTEND.md` | `.harness/docs/UI_DESIGN_SYSTEM.md` + `ARCHITECTURE.md` |
 | 后端编码 | `.harness/docs/CODING_BACKEND.md` | `PROJECT_RULES.md` + 技术方案 |
 | 前端编码 | `.harness/docs/CODING_FRONTEND.md` | `.harness/docs/UI_DESIGN_SYSTEM.md` + `PROJECT_RULES.md` + 技术方案 |
 | 代码评审 | `.harness/docs/CODE_REVIEW.md` | `PROJECT_RULES.md` |
 | 测试质量评分 | `.harness/docs/QUALITY_SCORE.md` | `PROJECT_RULES.md` |
 | 产品走查 | `.harness/docs/PRODUCT_ACCEPTANCE.md` | PRD + 设计文档 |
-| **Sprint / deploy-sprint 流程** | **`.harness/docs/SPRINT.md`** | `.harness/rules/task-rules.yml` + `config/harness.yml` |
+| **Sprint / deploy-sprint 流程** | **`.harness/docs/SPRINT.md`** | `.harness/rules/task-rules.yml` + `config/harness.yml` + `config/technology.yml` |
 | **CI/CD 红线 / 分支模型** | **`.harness/docs/CICD.md`** | `config/deploy.yml` |
 | deploy-sprint（test/prod） | `.harness/docs/SPRINT.md` | `.harness/docs/RELEASE.md` + `config/deploy.yml` |
 | 数据库迁移 | `docs/MIGRATION.md` | `templates/migration/` |
@@ -85,8 +89,10 @@ docs/
 └── references/             # 参考资料
 
 config/harness.yml          # Harness 项目级行为配置（走查环境、质量阈值、部署模式）
+config/technology.yml       # 技术栈、组件 manifest 与必需命令能力
 config/deploy.yml           # 发布环境与部署配置
 .harness/state/             # 环境锁、promotion 日志、框架运行状态
+.harness/runs/              # 任务 Plan/Review/attempt 过程数据（不入库）
 deploy/                     # test/prod 部署生成产物
 templates/migration/        # DB migration 模板（脚本 readFileSync）
 .harness/templates/observability/    # PromQL / LogQL 可执行查询

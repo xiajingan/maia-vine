@@ -6,12 +6,15 @@ import argparse
 import json
 from pathlib import Path
 
+from mai_harness.runtime.application.human_approval import read_native_decision
 from mai_harness.runtime.application.requirements import (
     complete_sprint_stories,
     confirm_stories,
     record_feedback,
     sync_story,
+    validate_story_confirmations,
 )
+from mai_harness.runtime.application.requirements_selection import confirm_selection, prepare_selection
 from mai_harness.runtime.application.sprint_context import validate_sprint_activation
 from mai_harness.runtime.domain.sprint_context import (
     sprint_header,
@@ -31,6 +34,11 @@ def main() -> int:
     confirm = sub.add_parser("confirm")
     confirm.add_argument("story_ids", nargs="+")
     confirm.add_argument("--by", required=True)
+    select = sub.add_parser("select", help="提交本 Sprint 的具体 Story 内容及精确 AC 集合人工确认")
+    select.add_argument("plan", type=Path)
+    selection_source = select.add_mutually_exclusive_group()
+    selection_source.add_argument("--from-host", action="store_true", help="读取已绑定 Codex 会话中的真实用户回复")
+    selection_source.add_argument("--event", type=Path, help="宿主签署的人工决定；省略时生成待确认请求")
     feedback = sub.add_parser("feedback")
     feedback.add_argument("sprint")
     feedback.add_argument(
@@ -59,6 +67,25 @@ def main() -> int:
                 status="draft",
                 action="intake",
             )
+        elif args.command == "select":
+            if args.event is None and not args.from_host:
+                receipt = prepare_selection(root, args.plan.resolve())
+            else:
+                decision = (
+                    read_native_decision(root, prepare_selection(root, args.plan.resolve()))
+                    if args.from_host
+                    else json.loads(args.event.read_text(encoding="utf-8"))
+                )
+                event = confirm_selection(root, args.plan.resolve(), decision)
+                receipt = {"decision": event["decision"]}
+                if event["decision"] == "approved":
+                    story_ids = [
+                        item["id"]
+                        for item in sprint_planning_contract(args.plan)["source_stories"]
+                        if validate_story_confirmations(root, [item])[1]
+                    ]
+                    if story_ids:
+                        receipt["content_confirmation"] = confirm_stories(root, story_ids, event["actor"])
         elif args.command == "confirm":
             receipt = confirm_stories(root, args.story_ids, args.by)
         elif args.command == "feedback":

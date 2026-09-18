@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from mai_harness.runtime.domain.design_policy import file_digest, policy_version
 from mai_harness.runtime.domain.document_registry import (
     REGISTRY_COLUMNS,
     REGISTRY_DIRECTORIES,
@@ -16,6 +18,7 @@ from mai_harness.runtime.domain.document_registry import (
     registry_markdown_table,
     validate_registry,
 )
+from mai_harness.runtime.domain.sprint_context import sprint_planning_contract, sprint_structure_digest
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
 
 LEGACY_COLUMNS = {
@@ -42,6 +45,76 @@ MAPPING_COMMON_KEYS = {
     "status",
     "supersedes",
 }
+
+
+def migrate_design_policy(root: Path, plan: Path, reason: str) -> dict[str, Any]:
+    """Upgrade one active iteration explicitly, preserving history without inventing approvals."""
+    if plan.parent.resolve() != (root / "docs/exec-plans/active").resolve() or not reason.strip():
+        raise ValueError("设计策略迁移只接受当前工程活动 Sprint 和明确原因")
+    store = StateStore(root / ".harness/state/sprints")
+    name = plan.stem + ".json"
+    with store.lock(name):
+        state = store.read_json(name, None)
+        if not isinstance(state, dict) or state.get("structure_sha256") != sprint_structure_digest(plan):
+            raise ValueError("迁移前必须恢复与激活状态一致的 Sprint 计划")
+        if policy_version(sprint_planning_contract(plan)) != 1 or state.get("design_governance_version", 1) != 1:
+            raise ValueError("该迭代不是待迁移的 v1 设计策略")
+        if state.get("planning_contract_version") != 3:
+            raise ValueError("先迁移到 planning contract v3，再迁移设计策略")
+        snapshots = {}
+        for directory in REGISTRY_DIRECTORIES:
+            index = root / "docs" / directory / "index.md"
+            if not index.exists():
+                continue
+            if errors := validate_registry(root, directory):
+                raise ValueError("先解决旧索引冲突再迁移:\n" + "\n".join(errors))
+            _, rows = registry_markdown_table(index.read_text(encoding="utf-8"))
+            canonical: dict[str, set[str]] = {}
+            for _, row in rows:
+                if row.get("Sprint") != plan.stem:
+                    continue
+                file = registry_link_target(row["文件"])
+                if (
+                    directory == "tech-docs"
+                    and row.get("方案类型") in {"backend", "frontend"}
+                    and row.get("状态") != "stale"
+                ):
+                    canonical.setdefault(row["方案类型"], set()).add(file)
+                path = index.parent / file
+                snapshots[f".harness/state/document-registry/revisions/{file_digest(path)}.md"] = path.read_text(
+                    encoding="utf-8"
+                )
+            if any(len(files) > 1 for files in canonical.values()):
+                raise ValueError(f"同 Sprint 存在多份同类方案，先明确唯一当前文件并整理历史关联: {canonical}")
+        before = plan.read_text(encoding="utf-8")
+        candidate = re.sub(r"(?m)^design_governance_version:.*\n", "", before)
+        candidate = candidate.replace(
+            "planning_contract_version: 3", "planning_contract_version: 3\ndesign_governance_version: 2", 1
+        )
+        backup = {
+            "plan": plan.relative_to(root).as_posix(),
+            "content": before,
+            "state": state,
+            "reason": reason.strip(),
+        }
+        StateStore(root / ".harness/state/document-registry/migrations").write_json(
+            plan.stem + "-policy-v2.json", backup
+        )
+        for relative, content in snapshots.items():
+            StateStore(root).write_text(relative, content)
+        updated = {**state, "design_governance_version": 2, "state_migrations": list(state.get("state_migrations", []))}
+        try:
+            StateStore(root).write_text(plan.relative_to(root), candidate)
+            updated["structure_sha256"] = sprint_structure_digest(plan)
+            updated.setdefault("state_migrations", []).append(
+                {"reason": reason, "migrated": ["design-governance-v2"], "recorded_at": datetime.now(UTC).isoformat()}
+            )
+            store.write_json(name, updated)
+        except Exception:
+            StateStore(root).write_text(plan.relative_to(root), before)
+            store.write_json(name, state)
+            raise
+    return {"policy_version": 2, "sprint": plan.stem, "status": "awaiting-current-content-and-human-approvals"}
 
 
 def _sha(value: str) -> str:
@@ -342,9 +415,7 @@ def rollback_document_registry_migrations(root: Path) -> list[dict[str, Any]]:
             }
         )
     mutation_paths = [
-        path
-        for item in rollbacks
-        for path in (item["index"], migration_store.path(item["receipt_name"]))
+        path for item in rollbacks for path in (item["index"], migration_store.path(item["receipt_name"]))
     ]
     snapshot = {path: path.read_bytes() if path.is_file() else None for path in mutation_paths}
     try:

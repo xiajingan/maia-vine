@@ -5,9 +5,9 @@
 
 **产出物**：设计文档保存至 `docs/design-docs/[feature]-design.md`，更新项目自有的作用域注册表 `index.md`，关联 Story/AC ID；受影响页面提供可对照的 HTML 原型或 PNG 设计稿。
 
-**渐进式加载**：先按设计索引的模块、页面/功能区域和 Scope Key 找到 current(`verified`) 条目，再读本次 PRD、UI Design System、受影响现状和强相关历史设计。当前实现与本次已验证设计是基线，不复制无关历史页面。
+**渐进式加载**：先按设计索引的模块、页面/功能区域和 Scope Key 找到 current(`ready`/`done`) 条目，再读本次 PRD、UI Design System、受影响现状和强相关历史设计。当前实现与本次已验证设计是基线，不复制无关历史页面。
 
-**版本边界**：新 Sprint 创建新设计文档，不改写旧 Sprint 产物；Exec 以当前 Task/Run 登记 `draft` 并用 `Supersedes` 指向 current Entry，Review PASS 后由 Runtime 发布并更新旧条目状态。
+**版本边界**：新 Sprint 创建新设计文档，不改写旧 Sprint 产物；Exec 以当前 Task/Run 登记 `draft` 并用 `Supersedes` 指向 current Entry，Agent Review PASS 且人工审核通过后由 Runtime 发布并更新旧条目状态。
 
 每份设计文档必须包含唯一的 `## 作用域清单`，并与 `docs/design-docs/index.md` 当前 Task/Run 登记逐行一致：
 
@@ -97,11 +97,11 @@
 
 ---
 
-## Boss 设计走查（项目可配置）
+## 人工设计审核
 
-`config/harness.yml.gates.ui_design_l3: true` 且 Sprint 实际列入 `design` 时，design Review PASS 后必须由 Boss 批准 `docs/design-docs/sprint-N-design-approval.yml`；backend-only 影响面不触发 UI L3。审批记录必须包含 `sprint`、`decision: approved`、`confirmed_by/confirmed_at/source`、`commit_sha`、当前 `planning_contract_sha256`，以及从当前 design attempt 抄录的 `design_reviews: [{task_id, report, sha256, recorded_at}]`。Runtime 验证摘要和 Git lineage，旧审批不能复用。
-
-该配置为 `false` 时，design 保持 L1 + 独立 Review，不得因本文档自行追加 L3。最终产品行为仍在 `product-acceptance` L3 走查。
+新版迭代的 UI 设计必须先通过 Agent Review，再由用户审核文档、原型和影响展示的本地依赖集合。标题前声明 `document_status: draft`；人工通过后 Runtime 一致发布正文和索引为 Ready，之后才能进入依赖它的前端技术方案与实现。
+`ui_design_l3` 仅兼容旧迭代，不能关闭新版门禁。纯后端范围无需 UI 任务。统一协议见 [DESIGN_GOVERNANCE.md](DESIGN_GOVERNANCE.md)。
+原型不得新增 PRD 外行为；未变页面引用现状，前端技术方案负责软件实现，不重新定义交互。原型使用独立、自包含资源目录；Review JSON 的 prototype_roots 声明该目录并绑定全部文件，格式见统一协议。资产变化使对应批准失效。
 
 ---
 
@@ -114,4 +114,4 @@
 3. 建立状态适用性矩阵，复用未变化的现状证据。
 4. 输出受影响页面的可对照原型/设计稿和 token 映射。
 5. 建立 AC → 页面/状态 → 设计证据追溯，执行质量自检。
-6. 仅在项目启用 UI L3 时准备并等待 Boss 走查。
+6. 提交当前文档与原型集合，等待人工审核并通过 Runtime 发布。

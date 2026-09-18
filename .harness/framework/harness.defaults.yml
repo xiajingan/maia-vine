@@ -21,7 +21,7 @@ planning:
 
 walkthrough_env: development
 gates:
-  ui_design_l3: false
+  ui_design_l3: false  # 仅兼容 design_governance_version=1；新版设计人工门禁不可关闭
   quality_threshold: 95
   require_e2e: true
 deploy:

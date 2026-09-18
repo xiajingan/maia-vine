@@ -94,9 +94,14 @@ class StateStore:
             except (FileNotFoundError, json.JSONDecodeError):
                 current = {}
             if current.get("owner") == owner:
-                (lock_path / "owner.json").unlink(missing_ok=True)
+                # Keep the public lock nonempty until an atomic rename releases it.
+                # Otherwise a waiter can replace the empty directory before rmdir,
+                # leaving this owner to remove (or fail on) the successor's lock.
+                released = lock_path.with_name(f".{lock_path.name}.{owner}.released")
+                os.rename(lock_path, released)
+                (released / "owner.json").unlink(missing_ok=True)
                 try:
-                    lock_path.rmdir()
+                    released.rmdir()
                 except FileNotFoundError:
                     pass
 

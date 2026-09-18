@@ -19,6 +19,7 @@ import yaml
 from mai_harness.runtime.application.action_executor import action_argv, execute_action
 from mai_harness.runtime.application.dependency_session import validate_session
 from mai_harness.runtime.application.deployment_candidate import validate_deployment_candidate
+from mai_harness.runtime.application.design_completion import completed_design_errors
 from mai_harness.runtime.application.integration_contract import (
     delivery_identity,
     integration_contract,
@@ -38,6 +39,7 @@ from mai_harness.runtime.application.task_evidence import (
 )
 from mai_harness.runtime.commands.validate_task_rules import validate as validate_rules
 from mai_harness.runtime.domain.actions import resolve_action
+from mai_harness.runtime.domain.design_policy import policy_version
 from mai_harness.runtime.domain.modes import PROJECT_TYPES
 from mai_harness.runtime.domain.sprint_context import (
     header_field,
@@ -261,6 +263,33 @@ def parse_task_id_statuses(content: str) -> dict[str, str]:
     return {task_id: status for task_id, _, status in parse_task_rows(content) if task_id}
 
 
+def prerequisite_statuses(content: str, task_id: str, result: GateResult) -> dict[str, list[str]]:
+    """Exclude only derived consumers of this task from type-level prerequisites.
+
+    An upstream revalidation must not wait for its own downstream remediation.
+    Independent tasks and explicit dependency evidence remain mandatory.
+    """
+    rows = table_rows(content)
+    graph, errors = task_dependency_graph(rows)
+    cycles = sorted(node for node in graph if node in transitive_task_dependencies(graph, node))
+    if cycles:
+        errors.append(f"Sprint 任务依赖形成循环: {', '.join(cycles)}")
+    result.blocked.extend(errors)
+    if errors:
+        return parse_task_statuses(content)
+    downstream = {
+        str(row.get("id"))
+        for row in rows
+        if (row.get("来源") or row.get("origin")) in {"remediation", "scope-split"}
+        and task_id in transitive_task_dependencies(graph, str(row.get("id")))
+    }
+    statuses: dict[str, list[str]] = {}
+    for row_id, row_type, status in parse_task_rows(content):
+        if row_id not in downstream:
+            statuses.setdefault(row_type, []).append(status)
+    return statuses
+
+
 def task_keyword(text: str, task_names: list[str]) -> str:
     value = str(text)
     known = next(
@@ -412,6 +441,8 @@ def evaluate(
         result.blocked.append(f"任务 {task_type} 不允许用于 project.type={current_type}")
         return result
     content = sprint_file.read_text(encoding="utf-8")
+    if task_type == "sprint-close":
+        result.blocked.extend(completed_design_errors(root, sprint_file))
     task_names = sorted((rules.get("tasks") or {}), key=len, reverse=True)
     task_rows = parse_task_rows(content)
     statuses = parse_task_statuses(content)
@@ -458,6 +489,10 @@ def evaluate(
         if len(matching_rows) != 1:
             result.blocked.append(f"当前任务未登记到 Sprint 任务表: {task_id or task_type} ({task_type})")
             return result
+        if sprint_planning_contract(sprint_file).get("planning_contract_version") == 3 and task_id:
+            statuses = prerequisite_statuses(content, task_id, result)
+            if result.blocked:
+                return result
     if task.get("execution_contract") == "integration-v1":
         contract = integration_contract(sprint_file, task_id or task_type, task)
         result.blocked.extend(validate_integration_contract(contract, task, harness_config))
@@ -782,7 +817,12 @@ def evaluate(
         config = load_harness_config()
         match = re.match(r"^sprint-\d+", sprint_id)
         series = match.group(0) if match else sprint_id
-        if task_type == "code" and config.get("gates", {}).get("ui_design_l3") is True and "design" in statuses:
+        if (
+            policy_version(sprint_planning_contract(sprint_file)) == 1
+            and task_type == "code"
+            and config.get("gates", {}).get("ui_design_l3") is True
+            and "design" in statuses
+        ):
             approval_path = root / "docs/design-docs" / f"{series}-design-approval.yml"
             design_approval = (
                 load_mapping_evidence(approval_path, result, "UI Design L3 审批") if approval_path.exists() else {}

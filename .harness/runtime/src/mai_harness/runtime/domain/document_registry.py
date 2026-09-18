@@ -10,6 +10,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mai_harness.runtime.domain.design_policy import (
+    PRODUCT_COLUMNS,
+    TECHNICAL_SECTIONS,
+    document_status,
+    file_digest,
+    validate_sections,
+    with_document_status,
+)
+
 REGISTRY_TASKS = {
     "product": ("product-specs", "product"),
     "design": ("design-docs", "design"),
@@ -64,7 +73,8 @@ REGISTRY_COLUMNS = {
         "Supersedes",
     ),
 }
-VALID_STATUS = {"verified", "stale", "draft"}
+VALID_STATUS = {"verified", "ready", "done", "stale", "retired", "draft"}
+PUBLISHED_STATUS = {"verified", "ready", "done"}
 VALID_TECH_KIND = {"backend", "frontend", "library"}
 TECHNICAL_DESIGN_CORE_SECTIONS = {
     "backend": (
@@ -82,10 +92,8 @@ TECHNICAL_DESIGN_CORE_SECTIONS = {
         "风险、回退与未决项",
     ),
 }
-TECHNICAL_DESIGN_CONTRACT_VERSION = 1
-TECHNICAL_DESIGN_CONTRACT_MARKER = re.compile(
-    rf"(?m)^technical_design_contract_version:\s*{TECHNICAL_DESIGN_CONTRACT_VERSION}\s*$"
-)
+TECHNICAL_DESIGN_CONTRACT_VERSION = 2
+TECHNICAL_DESIGN_CONTRACT_MARKER = re.compile(r"(?m)^technical_design_contract_version:\s*([12])\s*$")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{1,127}$")
 SPRINT_ID = re.compile(r"^sprint-[A-Za-z0-9][A-Za-z0-9._-]*$")
 SOURCE_REFERENCE = re.compile(r"(?:US-[0-9]+(?:-AC-[0-9]+)?|ARCHITECTURE|ASSIGNMENT)", re.I)
@@ -166,6 +174,10 @@ def _inventory_identity(
     file: str,
     raw: dict[str, str],
 ) -> tuple[str, ...]:
+    if directory_name == "product-specs":
+        anchor = re.search(r"#(SCOPE-[0-9]+)\)", raw.get("文件", ""))
+        if anchor:
+            return (file, anchor.group(1), raw["模块"].strip())
     common = (
         file,
         raw.get("Scope Key", "").strip().strip("`"),
@@ -191,6 +203,12 @@ def _document_inventory(
         return set(), [f"作用域清单无法读取: {document}: {exc}"]
     title = "最小范围与追溯矩阵" if directory_name == "product-specs" else "作用域清单"
     headers, rows = _section_table(content, title)
+    if directory_name == "product-specs" and tuple(headers) == PRODUCT_COLUMNS:
+        inventory = {(relative_file, raw["ID"].strip(), raw["系统/模块"].strip()) for _, raw in rows}
+        errors = []
+        if len(inventory) != len(rows):
+            errors.append(f"{document}: 范围 ID 重复")
+        return inventory, errors
     required = {"Scope Key", "模块"}
     if directory_name in {"product-specs", "design-docs"}:
         required.add("页面/功能区域")
@@ -217,7 +235,7 @@ def _document_inventory(
     return inventory, errors
 
 
-def validate_technical_design_structure(document: Path, tech_kind: str) -> list[str]:
+def validate_technical_design_structure(document: Path, tech_kind: str, *, policy: int = 1) -> list[str]:
     """Require the small, stable core structure declared by backend/frontend design specs."""
     required = TECHNICAL_DESIGN_CORE_SECTIONS.get(tech_kind)
     if required is None:
@@ -227,11 +245,14 @@ def validate_technical_design_structure(document: Path, tech_kind: str) -> list[
     except (OSError, UnicodeDecodeError) as exc:
         return [f"技术方案无法读取: {document}: {exc}"]
     errors: list[str] = []
-    if len(TECHNICAL_DESIGN_CONTRACT_MARKER.findall(content)) != 1:
+    versions = TECHNICAL_DESIGN_CONTRACT_MARKER.findall(content)
+    if len(versions) != 1 or (policy == 2 and versions != ["2"]):
         errors.append(
             f"{document}: 新版技术方案必须且只能声明一次 "
             f"technical_design_contract_version: {TECHNICAL_DESIGN_CONTRACT_VERSION}"
         )
+    if versions == ["2"]:
+        return errors + validate_sections(content, TECHNICAL_SECTIONS, str(document))
     for heading in required:
         matches = list(re.finditer(rf"(?m)^##\s+{re.escape(heading)}\s*$", content))
         if len(matches) != 1:
@@ -307,7 +328,7 @@ def _parse_rows(index: Path, directory_name: str) -> tuple[list[RegistryRow], li
         if not RUN_ID.fullmatch(row.run_id):
             errors.append(f"{prefix}: Run ID 必须是当前 attempt 的 32 位十六进制 ID")
         if row.status not in VALID_STATUS:
-            errors.append(f"{prefix}: 状态必须是 verified/stale/draft")
+            errors.append(f"{prefix}: 状态必须是 ready/done/stale/retired/draft（verified 仅兼容历史）")
         if directory_name in {"product-specs", "design-docs"} and raw["页面/功能区域"].strip() in EMPTY:
             errors.append(f"{prefix}: 页面/功能区域不能为空")
         if directory_name == "tech-docs":
@@ -343,16 +364,49 @@ def validate_registry(root: Path, directory_name: str, *, docs_dir: Path | None 
         target = (directory / row.file).resolve()
         if not target.is_relative_to(directory.resolve()) or not target.is_file():
             errors.append(f"{index}:{row.line}: 索引文件不存在: {row.file}")
-        elif hashlib.sha256(target.read_bytes()).hexdigest() != row.file_sha256:
-            errors.append(f"{index}:{row.line}: 已登记文档内容已变化: {row.file}")
+        elif file_digest(target) != row.file_sha256:
+            snapshot = root / ".harness/state/document-registry/revisions" / f"{row.file_sha256}.md"
+            replaced = any(
+                other.file == row.file
+                and other.sprint == row.sprint
+                and other.run_id != row.run_id
+                and other.file_sha256 == file_digest(target)
+                for other in rows
+            )
+            if not (
+                replaced
+                and row.status in PUBLISHED_STATUS | {"stale", "retired"}
+                and snapshot.is_file()
+                and file_digest(snapshot) == row.file_sha256
+            ):
+                errors.append(f"{index}:{row.line}: 已登记文档内容已变化: {row.file}")
+        revising = any(
+            other.file == row.file
+            and other.sprint == row.sprint
+            and other.run_id != row.run_id
+            and other.status == "draft"
+            for other in rows
+        )
+        if (
+            row.status in {"ready", "done"}
+            and target.is_file()
+            and not revising
+            and file_digest(target) == row.file_sha256
+            and document_status(target.read_text(encoding="utf-8")) != row.status
+        ):
+            errors.append(f"{index}:{row.line}: 索引与正文生命周期不一致: {row.file}")
     for file, sprints in file_sprints.items():
         if len(sprints) > 1:
             errors.append(f"{index}: 历史产物被跨 Sprint 复用或覆盖: {file} ({', '.join(sorted(sprints))})")
     for scope, scope_rows in by_scope.items():
-        verified = [row for row in scope_rows if row.status == "verified"]
+        verified = [row for row in scope_rows if row.status in PUBLISHED_STATUS]
         if len(verified) > 1:
             errors.append(f"{index}: Scope Key 存在多个 current(verified) 条目: {scope}")
-        if not verified and any(row.status != "draft" for row in scope_rows):
+        if (
+            not verified
+            and not any(row.status == "retired" for row in scope_rows)
+            and any(row.status != "draft" for row in scope_rows)
+        ):
             errors.append(f"{index}: Scope Key 的历史条目存在时必须保留一个 current(verified): {scope}")
         for row in scope_rows:
             for target_id in row.supersedes:
@@ -363,7 +417,7 @@ def validate_registry(root: Path, directory_name: str, *, docs_dir: Path | None 
                     errors.append(f"{index}:{row.line}: 条目不能 Supersedes 自己")
                 elif target.scope_key != row.scope_key:
                     errors.append(f"{index}:{row.line}: Supersedes 目标不属于同一 Scope Key: {target_id}")
-                elif target.status == "draft" or (row.status != "draft" and target.status != "stale"):
+                elif target.status == "draft" or (row.status != "draft" and target.status not in {"stale", "retired"}):
                     errors.append(
                         f"{index}:{row.line}: draft 只能覆盖 verified/stale，已发布条目只能覆盖 stale: {target_id}"
                     )
@@ -402,7 +456,7 @@ def validate_registry(root: Path, directory_name: str, *, docs_dir: Path | None 
             content = document.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        file_rows = [row for row in rows if row.file == relative_file]
+        file_rows = [row for row in rows if row.file == relative_file and row.file_sha256 == file_digest(document)]
         has_inventory = bool(re.search(rf"(?m)^#{{1,6}}\s+{re.escape(inventory_title)}\s*$", content))
         has_structure_contract = directory_name == "tech-docs" and bool(
             TECHNICAL_DESIGN_CONTRACT_MARKER.search(content)
@@ -410,13 +464,15 @@ def validate_registry(root: Path, directory_name: str, *, docs_dir: Path | None 
         requires_technical_contract = directory_name == "tech-docs" and (
             any(row.status == "draft" for row in file_rows) or has_structure_contract
         )
+        if directory_name == "tech-docs" and TECHNICAL_DESIGN_CONTRACT_MARKER.findall(content) == ["2"]:
+            for tech_kind in {row.raw["方案类型"].strip() for row in file_rows}:
+                errors.extend(validate_technical_design_structure(document, tech_kind, policy=2))
+            continue
         if not has_inventory and not requires_technical_contract:
             continue
         inventory, inventory_errors = _document_inventory(document, directory_name, relative_file)
         errors.extend(inventory_errors)
-        registered = {
-            _inventory_identity(directory_name, row.file, row.raw) for row in rows if row.file == relative_file
-        }
+        registered = {_inventory_identity(directory_name, row.file, row.raw) for row in file_rows}
         if missing := sorted(inventory - registered):
             errors.append(f"{document}: 正文作用域清单存在未登记行: {missing}")
         if extra := sorted(registered - inventory):
@@ -466,6 +522,8 @@ def validate_task_registry(
     artifact_paths: list[Path],
     source_stories: Any = None,
     requirement_mode: str | None = None,
+    *,
+    policy: int = 1,
 ) -> list[str]:
     """Require a passing design attempt to own draft rows for exactly its outputs."""
     registration = REGISTRY_TASKS.get(task_type)
@@ -497,16 +555,32 @@ def validate_task_registry(
         and (directory_name != "tech-docs" or row.raw["方案类型"].strip() == expected_kind)
     ]
     expected_documents = {row.file for row in task_rows}
+    if policy == 2:
+        if task_type in {"backend-design", "frontend-design"}:
+            sprint_documents = {
+                row.file
+                for row in rows
+                if row.sprint == sprint_id and row.raw.get("方案类型") == expected_kind and row.status != "stale"
+            }
+            if len(sprint_documents) != 1:
+                errors.append(f"同一 Sprint 只能有一个 {expected_kind} 技术方案文件，修订必须使用原文件")
+        for document in documents:
+            path = root / relative_root / document
+            if path.is_file():
+                if document_status(path.read_text(encoding="utf-8")) != "draft":
+                    errors.append(f"待审文档必须声明 document_status: draft: {path}")
+                if directory_name == "tech-docs":
+                    errors.extend(validate_technical_design_structure(path, expected_kind, policy=2))
     if not task_rows:
         errors.append(f"作用域索引没有登记当前 attempt 产物: Sprint={sprint_id}, Task={task_id}, Run={run_id}")
     for row in task_rows:
         if row.status != "draft":
-            errors.append(f"Exec 只能提交 draft 作用域条目，verified 由 Review PASS 发布: {row.entry_id}")
+            errors.append(f"Exec 只能提交 draft 作用域条目，发布须满足当前策略的 Review/人工门禁: {row.entry_id}")
         current = [
             candidate
             for candidate in rows
             if candidate.scope_key == row.scope_key
-            and candidate.status == "verified"
+            and candidate.status in PUBLISHED_STATUS
             and candidate.entry_id != row.entry_id
         ]
         if current and not {item.entry_id for item in current} <= set(row.supersedes):
@@ -519,6 +593,12 @@ def validate_task_registry(
             errors.append(f"本轮产物未登记作用域: {relative_root / document}")
             continue
         for row in matching:
+            if (
+                row.status in PUBLISHED_STATUS | {"stale", "retired"}
+                and row.run_id != run_id
+                and row.sprint == sprint_id
+            ):
+                continue
             if row.sprint != sprint_id or row.task_id != task_id or row.run_id != run_id or row.status != "draft":
                 errors.append(
                     f"本轮产物必须全部登记为 Sprint={sprint_id}、Task={task_id}、Run={run_id}、状态=draft: "
@@ -547,6 +627,8 @@ def validate_task_registry(
                 errors.append(f"non-product-change 作用域条目必须关联 ARCHITECTURE 或 ASSIGNMENT: {row.entry_id}")
     inventory: set[tuple[str, ...]] = set()
     for document in sorted(set(documents)):
+        if policy == 2 and directory_name == "tech-docs":
+            continue
         values, inventory_errors = _document_inventory(
             root / relative_root / document,
             directory_name,
@@ -554,7 +636,11 @@ def validate_task_registry(
         )
         inventory.update(values)
         errors.extend(inventory_errors)
-    registered = {_inventory_identity(directory_name, row.file, row.raw) for row in task_rows}
+    registered = (
+        set()
+        if policy == 2 and directory_name == "tech-docs"
+        else {_inventory_identity(directory_name, row.file, row.raw) for row in task_rows}
+    )
     if missing := sorted(inventory - registered):
         errors.append(f"正文作用域清单存在未登记行: {missing}")
     if extra := sorted(registered - inventory):
@@ -562,17 +648,19 @@ def validate_task_registry(
     return errors
 
 
-def promote_task_registry(
+def registry_publication_changes(
     root: Path,
     sprint_id: str,
     task_id: str,
     run_id: str,
     task_type: str,
-) -> Path | None:
-    """Publish only the current reviewed attempt and stale the entries it supersedes."""
+    *,
+    policy: int = 1,
+) -> dict[Path, str]:
+    """Prepare a complete write set before any publication side effect."""
     registration = REGISTRY_TASKS.get(task_type)
     if registration is None:
-        return None
+        return {}
     directory_name, expected_kind = registration
     directory = root / "docs" / directory_name
     index = directory / "index.md"
@@ -592,20 +680,69 @@ def promote_task_registry(
         raise ValueError("当前 Review attempt 没有可发布的 draft 作用域条目")
     publish_ids = {row.entry_id for row in current_rows}
     stale_ids = {entry_id for row in current_rows for entry_id in row.supersedes}
+    # A single-file revision publishes its complete scope set. Removed scopes
+    # retain a terminal history row instead of pretending to remain current.
+    retired_ids = {
+        row.entry_id
+        for row in rows
+        if policy == 2
+        and row.sprint == sprint_id
+        and row.file in {item.file for item in current_rows}
+        and row.scope_key not in {item.scope_key for item in current_rows}
+        and row.status in PUBLISHED_STATUS
+    }
     original = index.read_text(encoding="utf-8")
     lines = original.splitlines()
     status_index = REGISTRY_COLUMNS[directory_name].index("状态")
+    changes = {}
+    if policy == 2:
+        for file in {row.file for row in current_rows}:
+            path = directory / file
+            changes[path] = with_document_status(path.read_text(encoding="utf-8"), "ready")
     for row in rows:
-        next_status = "verified" if row.entry_id in publish_ids else "stale" if row.entry_id in stale_ids else None
+        next_status = (
+            ("ready" if policy == 2 else "verified")
+            if row.entry_id in publish_ids
+            else "stale"
+            if row.entry_id in stale_ids
+            else "retired"
+            if row.entry_id in retired_ids
+            else None
+        )
         if next_status is None:
             continue
         cells = [cell.strip() for cell in lines[row.line - 1].strip().strip("|").split("|")]
         cells[status_index] = next_status
         lines[row.line - 1] = "| " + " | ".join(cells) + " |"
-    _atomic_write(index, "\n".join(lines).rstrip() + "\n")
-    if publish_errors := validate_registry(root, directory_name):
-        _atomic_write(index, original)
-        raise ValueError("作用域索引发布后无效:\n- " + "\n- ".join(publish_errors))
+    changes[index] = "\n".join(lines).rstrip() + "\n"
+    for row in current_rows:
+        snapshot = root / ".harness/state/document-registry/revisions" / f"{row.file_sha256}.md"
+        changes[snapshot] = changes.get(directory / row.file, (directory / row.file).read_text(encoding="utf-8"))
+    return changes
+
+
+def promote_task_registry(
+    root: Path, sprint_id: str, task_id: str, run_id: str, task_type: str, *, policy: int = 1
+) -> Path | None:
+    changes = registry_publication_changes(root, sprint_id, task_id, run_id, task_type, policy=policy)
+    if not changes:
+        return None
+    directory_name = REGISTRY_TASKS[task_type][0]
+    index = root / "docs" / directory_name / "index.md"
+    originals = {path: path.read_text(encoding="utf-8") if path.exists() else None for path in changes}
+    try:
+        for path, content in changes.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(path, content)
+        if errors := validate_registry(root, directory_name):
+            raise ValueError("作用域索引发布后无效:\n- " + "\n- ".join(errors))
+    except Exception:
+        for path, content in originals.items():
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                _atomic_write(path, content)
+        raise
     return index
 
 
@@ -615,6 +752,8 @@ def task_registry_publication(
     task_id: str,
     run_id: str,
     task_type: str,
+    *,
+    pending_index: str | None = None,
 ) -> dict[str, Any]:
     """Build the immutable per-attempt snapshot consumed by downstream tasks."""
     registration = REGISTRY_TASKS.get(task_type)
@@ -631,7 +770,7 @@ def task_registry_publication(
         if row.sprint == sprint_id
         and row.task_id == task_id
         and row.run_id == run_id
-        and row.status == "verified"
+        and (row.status == "draft" if pending_index is not None else row.status in PUBLISHED_STATUS)
         and (directory_name != "tech-docs" or row.raw["方案类型"].strip() == expected_kind)
     ]
     if not published:
@@ -643,7 +782,9 @@ def task_registry_publication(
         "task_type": task_type,
         "run_id": run_id,
         "registry": index.relative_to(root).as_posix(),
-        "registry_sha256_at_publish": hashlib.sha256(index.read_bytes()).hexdigest(),
+        "registry_sha256_at_publish": hashlib.sha256(
+            pending_index.encode() if pending_index is not None else index.read_bytes()
+        ).hexdigest(),
         "rows": [
             {
                 "entry_id": row.entry_id,

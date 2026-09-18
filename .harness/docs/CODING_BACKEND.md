@@ -1,5 +1,7 @@
 # 后端编码规范
 
+本轮实现以有效 Ready/Done 技术方案与当前 ARCHITECTURE.md 为设计依据。发现职责、模型、接口或关键机制需要变化时，按 [设计治理协议](DESIGN_GOVERNANCE.md) 修订本 Sprint 的原方案，经重审和人工确认后更新架构；仅实现缺陷直接修复代码。完成 Review 对照架构约束、实际代码落点与验证证据进行双向核对。
+
 > 后端 `code` 任务的编码约束与完成标准。专用于 `code` 任务类型（后端）。
 > 技术方案见 [TECH_BACKEND.md](TECH_BACKEND.md)，线上观测见 [OBSERVABILITY.md](OBSERVABILITY.md)。
 

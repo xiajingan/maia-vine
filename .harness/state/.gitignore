@@ -8,6 +8,8 @@ library-packages/
 requirements/*
 !requirements/confirmations/
 !requirements/confirmations/*.json
+!requirements/selections/
+!requirements/selections/*.json
 !.gitignore
 !README.md
 !harness-version.txt

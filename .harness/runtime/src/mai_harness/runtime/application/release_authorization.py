@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
+from mai_harness.runtime.infrastructure.interaction import INTERACTION_PROOF_KEY_ENV, interaction_proof_digest
 from mai_harness.runtime.infrastructure.utils import load_yaml, write_yaml
 
 REQUIRED_FIELDS = {
@@ -37,7 +38,6 @@ REQUIRED_FIELDS = {
     "target_ref",
 }
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$")
-INTERACTION_PROOF_KEY_ENV = "HARNESS_INTERACTION_PROOF_KEY"
 MAX_AUTHORIZATION_WINDOW = timedelta(minutes=15)
 
 
@@ -53,13 +53,6 @@ def authorization_digest(record: dict[str, Any]) -> str:
 def authorization_hmac_digest(record: dict[str, Any], key: str) -> str:
     """Authenticate every authorization identity and decision field."""
     payload = {name: value for name, value in record.items() if name not in {"authorization_hmac", "receipt_sha256"}}
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    return hmac.new(key.encode(), encoded, hashlib.sha256).hexdigest()
-
-
-def interaction_proof_digest(signoff: dict[str, Any], key: str) -> str:
-    """Digest an externally signed interaction event; Harness only verifies it."""
-    payload = {name: value for name, value in signoff.items() if name != "interaction_proof"}
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hmac.new(key.encode(), encoded, hashlib.sha256).hexdigest()
 

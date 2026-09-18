@@ -8,8 +8,8 @@ description: 在活动 Sprint 中通过强制 Preflight、唯一执行协议、�
 1. 读取 `AGENTS.md`、活动 Sprint 计划，以及 `.harness/rules/task-rules.yml` 中当前任务类型的规则块。通用 `acceptance` 只与当前 `project.type` 和任务 facets 的适用验收合并，不得套用其他条件。
 2. 执行 `uv run --project .harness/runtime harness sprint-gate <task-type> <sprint-path> --task-id <task-id> --strict`。输入、模式、前置任务或 Preflight 任一失败都必须停止。
 3. 运行 `harness task-context` 获取 attempt 路径、唯一协议、`requirements` 和 `agent_invocations`；`requirements.mode=stories` 时所有 Agent 只按其中的 path/source_stories/sha256 使用需求输入。`execution_protocol=agent` 时先创建全新的 Plan Agent，以其 `invocation_id` 和 role 调用 `task-context` 完成绑定并将计划写入 `.harness/runs/`；返回 `entry_action.command` 时，在计划完成后原样执行并确认成功；随后创建全新的 Exec Agent并完成绑定。禁止复用旧 Agent 或 follow-up turn。
-4. `review_protocol=agent-full` 时按 `agent_invocations.review` 创建未参与 Plan/Exec 的全新 Review Agent并完成身份绑定；重试轮也必须新建实例。`artifact-only` 时前台只根据确定性 Action/Gate 证据生成 Review JSON，不派生 Review Agent。两者都必须写入 `task-context.review_report`，并执行 `task-review` 和 Review Gate。
+4. `review_protocol=agent-full` 时按 `agent_invocations.review` 创建未参与 Plan/Exec 的全新 Review Agent并完成身份绑定；重试轮也必须新建实例。`artifact-only` 时前台只根据确定性 Action/Gate 证据生成 Review JSON，不派生 Review Agent。两者都必须写入 `task-context.review_report`，并执行 `task-review`；返回 human_status=waiting 时，按 `.harness/docs/DESIGN_GOVERNANCE.md` 呈现具体产物并等待人工。仅在 task-approve 发布成功后执行 Review Gate。
 5. 最终 PASS 必须 `scope=full` 并覆盖全部稳定验收 ID；`focused` 只能返回 FAIL。
-6. FAIL 表示范围内 defect/regression，使用 `--new-attempt --increment-retry` 重新进入 Preflight；INCOMPLETE 表示证据、环境或范围缺口，先分诊再决定后续动作。默认重试策略保持不变；修复任务与父任务共享预算。重置必须附 `--reset-retry-reason`，旧 attempt 证据失效；L3 审批始终留在前台。
+6. FAIL 表示范围内 defect/regression，使用 `--new-attempt --increment-retry` 重新进入 Preflight；INCOMPLETE 表示证据、环境或范围缺口，先分诊再决定后续动作。默认重试策略保持不变；修复任务与父任务共享预算。重置必须附 `--reset-retry-reason`，旧 attempt 证据失效；L3 审批始终留在前台；等待人工不是失败重试，不创建新 attempt 代替等待。
 
 本 Skill 只定义通用执行协议。任务差异只存在于 task-rules；确定性检查和状态转换由 Python Runtime 承担。

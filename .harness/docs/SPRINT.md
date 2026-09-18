@@ -5,7 +5,7 @@
 > **单一真源边界**：
 > - `docs/SPRINT.md`：Sprint / deploy-sprint 的流程与编排协议
 > - `.harness/rules/task-rules.yml`：任务类型、工具边界、门控、产出物、验收条件、派生规则（机械执行真源）
-> - `config/harness.yml`：项目级流程开关（走查环境、质量阈值、部署模式、UI L3）
+> - `config/harness.yml`：项目级流程开关（走查环境、质量阈值、部署模式、历史 UI L3）
 > - `config/technology.yml`：技术栈、组件 manifest 与必需命令能力
 > - `docs/CICD.md`：CI/CD why-only 红线、分支/环境策略、故障速查；不定义 Sprint 流程
 
@@ -92,9 +92,7 @@ Sprint 不是技术任务容器，而是一次可被验收的产品/能力增量
 
 ### 需求接入与反馈同步
 
-USER_STORIES 是需求唯一输入真源，PRD、技术方案、测试和验收都是派生产物。用户直接提出新需求时，编排者必须先把原话和已确认事实整理为临时 Story input，执行 `harness requirements intake --input <path>` 写入 `draft`；未知字段保留 TODO。向 Boss 回读场景、约束、非目标和 AC 并确认后，使用 `harness requirements confirm <Story ID...> --by <name>` 原地转为 `ready` 并记录逐 Story 内容摘要。已有 ready Story 内容变化时同一命令执行重新确认；activate/amend 同时绑定需求摘要与 ask_user 确认凭证，手工改状态不能旁路。
-
-一轮 Sprint 可以点选一个或多个 Story，并为每个 Story 选择一个或多个 AC。用户未指定 Story 时，编排器只展示 ID、标题和状态供用户点选，不得默认纳入全部需求。启动规划时若被选 Story 为 `draft` 或 ready 但缺少当前内容确认凭证，编排器先批量回读并等待 Boss 确认，再执行 `harness requirements confirm <Story ID...> --by <name>`；该命令不重写需求语义。未被本轮选中的 Draft 不要求确认，也不能进入 `source_stories`。
+USER_STORIES 是需求唯一输入真源；PRD 和技术方案分层转译，测试和验收记录事实。原始输入通过 requirements intake 进入 Draft。人工确认当前内容与本轮精确 US/AC 选择后才能激活；新增迭代执行 design_governance_version: 2。具体命令、真实用户事件及确认失效规则统一见 [DESIGN_GOVERNANCE.md](DESIGN_GOVERNANCE.md)，未选 Draft 不要求确认。
 
 Story input 使用唯一的紧凑 YAML 契约：顶层为 `id/title/priority/scene/statement/constraints/acceptance`；`scene` 使用 `user/context/trigger/current_difficulty/observable_outcome/source`，`constraints` 使用 `business_rules/external_constraints/non_goals/assumptions`，每个 acceptance 使用 `id/given/when/then`。该文件只放在 `.harness/runs/requirements/` 作为命令输入，不是第二份需求真源；成功同步后以 USER_STORIES 为准。
 
@@ -147,7 +145,7 @@ Review 若发现输入层级错误，不在当前任务内静默改上游，也�
 
 ### 文档作用域注册表
 
-`docs/product-specs/index.md`、`docs/design-docs/index.md` 与 `docs/tech-docs/index.md` 是项目自有的机器可读注册表。每行绑定 Entry ID、Scope Key、文档 SHA-256、Sprint、Task ID、Run ID、来源和实际模块/页面/表/API/组件；同一 Scope Key 最多一个 `verified` current。Exec 只登记当前 attempt 的 `draft`，且只能引用本轮精确选中的 Story/AC（non-product-change 只能引用 ARCHITECTURE/ASSIGNMENT），正文作用域清单必须与本 attempt 索引逐行一致；Review PASS 后 Runtime 才发布这些行并将其 Supersedes 目标标为 `stale`，同时把该 attempt 的不可变 publication receipt 纳入 Review artifact，后续任务不依赖会继续变化的共享 index 摘要。历史文件不得跨 Sprint 复用或改写，`doc-lint --ci` 校验完整注册表。旧版索引必须显式执行 `harness registry-migrate`；缺少 Scope Key、页面/API/组件语义的旧简单索引必须通过工程内 `--mapping <yaml>` 逐文件确认，禁止自动猜测，可用 `--rollback` 在索引未被继续修改时恢复。
+产品、UI、技术索引与当前正文、历史快照、批准和架构通过 Runtime 一致发布。Agent Review PASS 后等待人工确认，Ready 后才能继续；同 Sprint 技术方案修订原文件。机器列、摘要、状态和升级协议统一见 [DESIGN_GOVERNANCE.md](DESIGN_GOVERNANCE.md)。旧简单索引仍使用 registry-migrate --mapping 显式迁移，不能猜测语义。
 
 旧简单索引 mapping 固定为 `version: 1` 与 `entries`；每项填写 `directory/file/entry_id/scope_key/module/source/sprint/status/supersedes`，产品/设计再填 `page_or_area`，技术方案再填 `tech_kind/table_or_api/component`。迁移生成的 receipt 会绑定 mapping 路径与 SHA-256；字段缺失、多余、未匹配或语义不合法时原索引保持不变。
 
@@ -222,6 +220,8 @@ REVIEW FAIL 时，任务进入重试循环（默认最多重试 2 次，不含�
 
 **Sprint 闭环协议**（L3 走查通过后，编排者依序执行）：
 
+归档前，按实现/质量 Review 的 design_conformance，对本轮每份适用设计执行 `task-approve --complete-from` 完成 Done 核对；新版 sprint-close 阻止缺少该核对的归档。具体参数见 DESIGN_GOVERNANCE。
+
 1. `sprint-close` 在 sprint 分支中归档计划：`docs/exec-plans/active/` → `docs/exec-plans/completed/`，并更新 `AGENTS.md`、执行 `harness requirements complete <sprint-id>`；Runtime 按 AC 当前语义累计已签收证据，全部 AC 已交付才把 Story 从 `ready` 更新为 `done`，部分交付保持 `ready` 并生成可随分支合并的 `docs/acceptance-reports/<sprint>-requirements-completion.json`，且校验 approved Boss signoff、planning contract 与需求摘要不变
 2. `pr` 把上述归档与交付物一起合入目标远端分支；禁止先合并、后在已删除 worktree 中寻找计划
 3. 明确确认合并后，从主工作区执行 `harness worktree destroy <sprint-id> --merged-into <remote-ref>`；dirty、未合并或无法验证时拒绝删除
@@ -231,7 +231,7 @@ REVIEW FAIL 时，任务进入重试循环（默认最多重试 2 次，不含�
 
 **迭代完成校验**（闭环前逐项确认）：
 1. 全部任务状态为 `done`（无 `pending`/`blocked`/`in-progress`）
-2. L3 门控任务已获用户通过 `ask_user` 工具明确确认（`通过`/`approved`），且已生成 `sprint-N-boss-signoff.yml`
+2. 适用设计门禁均有当前版本的有效人工发布，产品走查已获用户明确确认并生成 `sprint-N-boss-signoff.yml`
 3. `config/technology.yml` 对应必需命令全量通过 + 质量评分 ≥ 95 + 产品走查通过
 4. 产出物文件**物理存在**：`docs/acceptance-reports/sprint-N-acceptance.md` + `sprint-N-walkthrough.md` + `sprint-N-boss-signoff.yml`
 
@@ -345,6 +345,8 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 
 ## ⛔ L3 门控
 
+USER_STORIES/Pick、PRD、UI 与前后端技术方案的新版人工门禁，统一执行 [设计治理协议](DESIGN_GOVERNANCE.md)。以下定义产品走查，不替代各设计阶段的批准。
+
 `product-acceptance` 是 L3 门控任务，**必须先完整执行（Step 1→2→3），再呈现门控。**
 
 ### 执行流程
@@ -363,10 +365,10 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 |------|---------|-----------|---------|
 | 产品走查 | `product-acceptance` Review PASS 后 | `sprint-N-walkthrough.md` + `sprint-N-acceptance.md` + `sprint-N-boss-signoff.yml` | `ask_user` 工具 |
 
-### L3 执行约束
+### 产品走查 L3 执行约束
 
 - 走查指南先于 Boss 走查生成，走查报告用于记录 Boss 结果
-- `ask_user` 是 L3 的唯一放行动作
+- 产品走查须通过真实用户交互确认后登记 acceptance-record；新版设计门禁另以 task-approve 校验宿主事件和发布版本
 - `sprint-close` 以前，`sprint_gate.py` 必须校验签收文件和走查产物结构
 
 **"没有反馈"等同于"未通过"。**
@@ -388,7 +390,7 @@ Runtime 将任务唯一解析为 `execution_protocol=action|agent|orchestrator` 
 | 任务类型 | 历史文档使用规则 |
 |---|---|
 | PRD / 设计 / 技术方案 | 先读本次 User Story 与对应索引；只加载与当前需求强相关的历史文档。产出物是新的迭代文档，必须显式写清对旧设计的变更、优化、删除；不直接改旧 PRD/设计/技术方案。 |
-| 多份相关历史文档 | 优先选择最近更新、验证状态为 `verified` 的文档；若逻辑冲突，以更新且更贴近当前需求的文档为参考，并在新文档记录取舍。 |
+| 多份相关历史文档 | 读取唯一当前有效版本及必要历史；冲突按来源职责和批准版本处理，不能按更新时间自动裁决。 |
 | Coding | 存在适用技术方案时，只读取 `upstream_inputs` 投影出的本轮技术方案与项目编码规范；PRD/设计只作为技术方案上游，需求摘要仅做漂移校验。流程明确没有技术方案时，使用显式最近依赖与项目基线，不自行检索历史或补造方案。 |
 | 测试用例 | 与 Code 一样描述系统最新状态。生成前检索 `docs/test-cases/index.md` 与相关 YAML；业务流程变更时直接修改既有用例并更新 `last_modified_in` / `last_verified_in`，不得基于旧流程平行新增重复用例。 |
 

@@ -9,7 +9,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from mai_harness.runtime.domain.sprint_context import table_rows
+from mai_harness.runtime.domain.design_policy import policy_version
+from mai_harness.runtime.domain.sprint_context import (
+    planning_contract_from_content,
+    table_rows,
+    task_dependency_graph,
+    transitive_task_dependencies,
+)
 
 VALID_STATES = re.compile(
     r"^(done|completed|通过|完成|in-progress|进行中|pending|待开始|blocked|阻塞|failed|失败|spawned|已派发|rollback|✅|⏳|⬜|🔄)$",
@@ -57,6 +63,7 @@ def rollback_types(
     reason: str,
     *,
     timestamp: str | None = None,
+    task_ids: set[str] | None = None,
 ) -> tuple[str, int]:
     """Roll back every affected task type with one auditable log entry."""
     lines = content.split("\n")
@@ -75,6 +82,7 @@ def rollback_types(
         headers = [cell.strip().casefold() for cell in lines[header_index].strip().strip("|").split("|")]
         type_index = next(index for index, value in enumerate(headers) if value in {"类型", "type"})
         status_index = next(index for index, value in enumerate(headers) if value in {"状态", "status"})
+        id_index = headers.index("id") if "id" in headers else -1
     else:
         type_index = status_index = -1
     for index in range(header_index + 2, len(lines)):
@@ -85,6 +93,8 @@ def rollback_types(
             continue
         values = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(values) <= max(type_index, status_index) or values[type_index] not in task_types:
+            continue
+        if task_ids is not None and (id_index < 0 or values[id_index] not in task_ids):
             continue
         current = values[status_index]
         if current and VALID_STATES.match(current.split()[0]):
@@ -114,6 +124,7 @@ def reopen_scope(
     reason: str,
     *,
     timestamp: str | None = None,
+    owner_task_ids: set[str] | None = None,
 ) -> tuple[str, list[str]]:
     """Rollback the responsible stage and every planned downstream task."""
     if not owner_types:
@@ -128,6 +139,31 @@ def reopen_scope(
     if from_row is None:
         raise ValueError(f"Review 来源任务未登记在 Sprint: {from_task_id}")
     from_type = from_row.get("类型") or from_row.get("type") or ""
+    if policy_version(planning_contract_from_content(content)) == 2:
+        graph, errors = task_dependency_graph(rows)
+        if errors:
+            raise ValueError("\n".join(errors))
+        ancestors = transitive_task_dependencies(graph, from_task_id) | {from_task_id}
+        eligible = {
+            row["id"] for row in rows if row["id"] in ancestors and (row.get("类型") or row.get("type")) in owner_types
+        }
+        if owner_task_ids is not None and (not owner_task_ids or not owner_task_ids <= eligible):
+            raise ValueError("责任任务必须来自本次依赖闭包内的对应设计责任域")
+        seeds = owner_task_ids if owner_task_ids is not None else eligible or {from_task_id}
+        affected_ids = seeds | {task_id for task_id in graph if transitive_task_dependencies(graph, task_id) & seeds}
+        affected = [row["id"] for row in rows if row["id"] in affected_ids]
+        affected_types = {row.get("类型") or row.get("type") for row in rows if row["id"] in affected_ids}
+        updated, count = rollback_types(
+            content,
+            from_task_id,
+            affected_types,
+            f"scope-conflict({responsible_scope}): {reason}",
+            timestamp=timestamp,
+            task_ids=affected_ids,
+        )
+        if count != len(affected):
+            raise ValueError("任务状态无法按设计依赖完成回退")
+        return updated, affected
     owner_stage = next((index for index, stage in enumerate(stages) if stage_types(stage) & owner_types), -1)
     current_stage = next((index for index, stage in enumerate(stages) if from_type in stage_types(stage)), -1)
     if owner_stage < 0:

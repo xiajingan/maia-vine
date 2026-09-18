@@ -59,6 +59,7 @@ COMMANDS = {
         "task_commit",
         "task_context",
         "task_review",
+        "task_approve",
         "test_case_backfill",
         "test_case_validator",
         "ui_audit",

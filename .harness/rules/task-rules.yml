@@ -289,7 +289,7 @@ tasks:
   product:
     label: "产品设计"
     spec: "PRODUCT_SENSE.md"
-    gate: L1  # 仅通知（Review 已保障质量）
+    gate: L3  # Agent Review 后人工审核当前产物；适用范围由规划决定
     tools:
       allow: [file-rw, search, explore]
       deny: [bash, modify-code]
@@ -299,17 +299,18 @@ tasks:
       artifacts: ["PRD 文档"]
       index: "docs/product-specs/index.md"
     acceptance:
+      - "产物职责和抽象层次正确，用户可理解结果；领域规则有唯一所有者，新增复杂度有必要性"
       - "Story 场景内核、约束、非目标和 AC 已准确回读，假设未伪装成事实"
       - "PRD 仅包含满足 AC 或明确 Architecture 风险所需的最小产品增量；每个范围项均绑定有效来源，新增/修改/删除及新增复杂度说明必要性"
-      - "PRD 的最小范围与追溯矩阵由机器校验：Scope ID 唯一，Scope Key/模块/页面与当前 Task/Run 索引逐行一致，范围动作与转译枚举合法，完整覆盖 source_stories，产品行为与验收观察具有实质内容"
+      - "PRD 的最小范围与追溯矩阵由机器校验：七列表头、范围 ID 唯一，通过文件锚点与当前 Task/Run 索引关联，完整覆盖 source_stories，产品行为与验收观察具有实质内容"
       - "PRD 影响范围与 planning contract impact_surfaces 一致；发现新增影响面时先 amend，再进入后续任务"
-      - "产品作用域索引绑定文档 SHA-256 与当前 Task/Run；Exec 登记 draft，Review PASS 后 Runtime 发布 verified、处理 Supersedes 并生成不可变 publication receipt"
+      - "产品作用域索引绑定文档 SHA-256 与当前 Task/Run；Exec 登记 draft，Review PASS 且人工批准当前版本后 Runtime 发布 ready、处理 Supersedes 并生成不可变 publication receipt"
 
   design:
     label: "UI 设计"
     spec: "DESIGN.md"
     specs: ["DESIGN.md", "UI_DESIGN_SYSTEM.md"]  # H-21: plan/exec 应同时加载视觉规范单一源
-    gate: L1  # 仅通知（Review 已保障质量）
+    gate: L3  # Agent Review 后人工审核当前产物；适用范围由规划决定
     allowed_project_types: [fullstack, frontend]
     tools:
       allow: [file-rw, search, explore, frontend-design, canvas-design]
@@ -320,6 +321,7 @@ tasks:
       artifacts: ["设计文档", "HTML 原型或 PNG 设计稿"]
       index: "docs/design-docs/index.md"
     acceptance:
+      - "产物职责和抽象层次正确，用户可理解结果；领域规则有唯一所有者，新增复杂度有必要性"
       - "PRD/AC 与受影响页面、状态和设计证据双向追溯"
       - "设计为满足行为结果的最小交互增量，新增页面/步骤/组件均有必要性"
       - "UI_DESIGN_SYSTEM.md §5 状态适用性已判断；本次变化直接影响的可达状态有证据"
@@ -327,12 +329,12 @@ tasks:
       - "修改既有页面含现状/目标对照，项目 token 与组件 Profile 未被旁路"
       - "HTML 原型基于 templates/ui/prototype-base.html，引用 templates/ui/tokens.css"
       - "设计文档含适用 Token 使用清单（UI_DESIGN_SYSTEM.md §8.3）"
-      - "设计作用域索引绑定文档 SHA-256 与当前 Task/Run；Exec 登记 draft，Review PASS 后 Runtime 发布 verified、处理 Supersedes 并生成不可变 publication receipt"
+      - "设计作用域索引绑定文档 SHA-256 与当前 Task/Run；Exec 登记 draft，Review PASS 且人工批准当前版本后 Runtime 发布 ready、处理 Supersedes 并生成不可变 publication receipt"
 
   backend-design:
     label: "后端技术方案"
     spec: "TECH_BACKEND.md"
-    gate: L1
+    gate: L3  # Agent Review 后人工审核当前产物；适用范围由规划决定
     allowed_project_types: [backend, fullstack]
     tools:
       allow: [file-rw, search, explore]
@@ -345,10 +347,11 @@ tasks:
       artifacts: ["后端技术方案"]
       index: "docs/tech-docs/index.md"
     acceptance:
+      - "产物职责和抽象层次正确，用户可理解结果；领域规则有唯一所有者，新增复杂度有必要性"
       - "Story/AC、PRD、ARCHITECTURE.md 与技术变更双向追溯"
       - "选择成本最低的适用建模方式并服从项目 Architecture Profile，未机械套用固定分层或 DDD"
-      - "技术方案声明 technical_design_contract_version: 1，并以二级章节完整填写来源与约束回读、现状与最小变更、建模与核心流程、契约与验证、风险/回退/未决项；Runtime 拒绝缺失、重复和空章节"
-      - "技术作用域索引绑定文档 SHA-256 与当前 Task/Run；backend draft 由 Review PASS 发布并生成不可变 publication receipt，模块与表/API/组件可检索"
+      - "技术方案声明 technical_design_contract_version: 2，仅用来源与约束、现状与最小变更、建模与核心流程三个二级章节；对象具体，模型/接口/流程一致，架构修改说明完整"
+      - "技术作用域索引绑定文档 SHA-256 与当前 Task/Run；backend draft 由 Review PASS 与人工批准后发布 ready并生成不可变 publication receipt，模块与表/API/组件可检索"
     acceptance_by_facet:
       data: ["数据所有权、不变量、事务边界、迁移与回退影响明确"]
       integration: ["外部契约、超时/失败语义、兼容性和验证明确"]
@@ -361,7 +364,7 @@ tasks:
     label: "前端技术方案"
     spec: "TECH_FRONTEND.md"
     specs: ["TECH_FRONTEND.md", "UI_DESIGN_SYSTEM.md"]
-    gate: L1
+    gate: L3  # Agent Review 后人工审核当前产物；适用范围由规划决定
     allowed_project_types: [fullstack, frontend]
     tools:
       allow: [file-rw, search, explore]
@@ -375,11 +378,12 @@ tasks:
       artifacts: ["前端技术方案"]
       index: "docs/tech-docs/index.md"
     acceptance:
+      - "产物职责和抽象层次正确，用户可理解结果；领域规则有唯一所有者，新增复杂度有必要性"
       - "Story/AC、PRD/设计与组件、状态、契约和验证双向追溯"
-      - "技术方案声明 technical_design_contract_version: 1，并以二级章节完整填写来源与约束回读、现状与最小变更、组件与状态所有权、契约与验证、风险/回退/未决项；Runtime 拒绝缺失、重复和空章节"
+      - "技术方案声明 technical_design_contract_version: 2，仅用来源与约束、现状与最小变更、建模与核心流程三个二级章节；对象具体，模型/接口/流程一致，架构修改说明完整"
       - "状态具有单一真源和最近稳定拥有者，共享抽象具有真实消费者与稳定语义"
       - "技术栈与 config/technology.yml 一致，只应用匹配的 UI_DESIGN_SYSTEM.md Profile"
-      - "技术作用域索引绑定文档 SHA-256 与当前 Task/Run；frontend draft 由 Review PASS 发布并生成不可变 publication receipt，模块与表/API/组件可检索"
+      - "技术作用域索引绑定文档 SHA-256 与当前 Task/Run；frontend draft 由 Review PASS 与人工批准后发布 ready并生成不可变 publication receipt，模块与表/API/组件可检索"
     acceptance_by_facet:
       routing: ["新增/变化路由的 URL 状态、参数真源、鉴权和兼容影响明确"]
       performance: ["性能设计包含现状/预算/触发依据和浏览器验证，不使用无来源统一阈值"]
@@ -674,6 +678,7 @@ tasks:
       - "docs/acceptance-reports/<N-name>-walkthrough.md 必须存在"
     artifact_action: project.acceptance.guard
     steps:
+      - "设计治理 v2 在归档前按实现/质量 Review 的 design_conformance 对每份设计执行 task-approve --complete-from；确认文档 Done 与架构实现状态"
       - "归档计划：docs/exec-plans/active/ → docs/exec-plans/completed/"
       - "更新 AGENTS.md 当前迭代指针"
       - "执行 harness requirements complete <N-name>，仅将本 Sprint 引用且不再被其他 active Sprint 使用的 Story 从 ready 更新为 done"
@@ -963,10 +968,10 @@ gates:
     action: "AI 完成后通知用户，无需等待确认，自动继续下一任务"
   L3:
     label: "必须审批"
-    action: "AI 完成任务（Step 1→2→3）后，必须使用 ask_user 工具阻塞等待用户明确确认（通过/approved/继续）"
-    enforcement: "编排者必须调用 ask_user 工具，禁止仅输出文字后自行继续"
-    constraint: "禁止同一轮对话跨越 L3 阻断点。没有反馈 = 未通过。"
-    preflight_check: "下游任务 Pre-Flight 必须验证 L3 产出物文件存在，文件不存在 = 未执行 = hard stop"
+    action: "展示当前具体产物、范围与版本，通过宿主交互等待用户对该对象的明确决定"
+    enforcement: "设计策略 v2 消费绑定请求的可信宿主事件；ask_user 调用、自填审批人或全局继续均不替代批准"
+    constraint: "没有回复、拒绝、版本变化均不放行；已有仍有效的具体批准保留"
+    preflight_check: "下游验证当前策略的批准、版本和一致发布记录；只有产物文件或 Review PASS 不足以放行"
 
 # ─── 派生规则 ──────────────────────────────────────────────────
 # 注意：REVIEW FAIL 不走 spawn，而是在同一任务内 Step 1→2→3 重试。

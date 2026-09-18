@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 
 from mai_harness.runtime.application.task_evidence import (
-    ARCHITECTURE_BOUND_TASK_TYPES,
     PR_TASK_TYPES,
     acceptance_records,
     agent_invocation_id,
@@ -16,6 +15,7 @@ from mai_harness.runtime.application.task_evidence import (
     require_ready_attempt,
     required_agent_roles,
 )
+from mai_harness.runtime.domain.design_policy import HUMAN_DESIGN_TASKS, TECHNICAL_TASKS, file_digest, policy_version
 from mai_harness.runtime.domain.sprint_context import (
     sprint_header,
     sprint_planning_contract,
@@ -87,6 +87,14 @@ def main() -> int:
             "upstream_inputs": upstream_inputs,
         }
         contract = sprint_planning_contract(args.sprint)
+        payload["design_governance_version"] = policy_version(contract)
+        if policy_version(contract) == 2 and args.task_type in HUMAN_DESIGN_TASKS:
+            payload["human_review"] = {
+                "required": True,
+                "status": state.get("human_status", "draft"),
+                "request": state.get("approval"),
+                "publication": state.get("publication"),
+            }
         sprint_type = sprint_header(args.sprint).get("sprint_type", "")
         uses_stories = sprint_uses_story_requirements(sprint_type, contract)
         preferred_inputs = (rules.get("task_input_projections") or {}).get(args.task_type, [])
@@ -110,12 +118,21 @@ def main() -> int:
                 else None
             ),
         }
-        if args.task_type in ARCHITECTURE_BOUND_TASK_TYPES:
+        if "architecture_sha256" in (state.get("context") or {}):
             payload["architecture"] = {
                 "path": "ARCHITECTURE.md",
-                "sha256": (state.get("context") or {}).get("architecture_sha256"),
+                "sha256": file_digest(root / "ARCHITECTURE.md"),
+                "baseline_sha256": state["context"]["architecture_sha256"],
                 "change_protocol": "内容变化后重新运行当前任务 Preflight",
             }
+            if policy_version(contract) == 2:
+                payload["architecture"]["change_protocol"] = (
+                    "技术方案内说明变化，人工批准后由 Runtime 发布；禁止直接覆盖架构"
+                )
+                if args.task_type in TECHNICAL_TASKS:
+                    payload["architecture"]["candidate_path"] = str(
+                        Path(state["run_dir"]) / "architecture-candidate.md"
+                    )
         if entry_action := task.get("entry_action"):
             payload["entry_action"] = {
                 "id": entry_action,

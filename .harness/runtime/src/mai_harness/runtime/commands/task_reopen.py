@@ -14,6 +14,7 @@ from mai_harness.runtime.application.sprint_context import (
 )
 from mai_harness.runtime.application.task_evidence import load_current_attempt
 from mai_harness.runtime.commands.task_rollback import reopen_scope
+from mai_harness.runtime.domain.design_policy import policy_version
 from mai_harness.runtime.domain.scope_routing import RESPONSIBLE_SCOPES, resolve_scope_route
 from mai_harness.runtime.domain.sprint_context import (
     planning_contract_digest,
@@ -21,6 +22,8 @@ from mai_harness.runtime.domain.sprint_context import (
     sprint_planning_contract,
     sprint_structure_digest,
     table_rows,
+    task_dependency_graph,
+    transitive_task_dependencies,
 )
 from mai_harness.runtime.infrastructure.core.paths import HarnessPaths
 from mai_harness.runtime.infrastructure.core.state_store import StateStore
@@ -80,14 +83,35 @@ def main() -> int:
     responsible_scope = min(scopes, key=precedence.__getitem__)
     sprint_type = sprint_header(sprint).get("sprint_type", "")
     try:
-        route = resolve_scope_route(rules, sprint_type, responsible_scope)
+        routes = {
+            scope: resolve_scope_route(rules, sprint_type, scope)
+            for scope in sorted(scopes, key=precedence.__getitem__)
+        }
     except ValueError as exc:
         parser.error(str(exc))
-    owner_types = set(route.get("owner_tasks", ()))
-    transfer_to = route.get("transfer_to")
+    owner_groups = [set(route["owner_tasks"]) for route in routes.values() if "owner_tasks" in route]
+    owner_types = set().union(*owner_groups)
+    transfers = {route["transfer_to"] for route in routes.values() if "transfer_to" in route}
+    if len(transfers) > 1:
+        parser.error("同一 Review 的责任域转移目标不一致；先统一 scope_conflict_routes，不能遗漏冲突")
+    # A transfer escalates the whole Review; local dependency rollback is only
+    # sufficient when every declared scope can be resolved in this Sprint.
+    transfer_to = next(iter(transfers), None)
     if args.transfer_sprint and not isinstance(transfer_to, str):
         parser.error("当前责任域在本 Sprint 内回退，不接受 --transfer-sprint")
-    owner_present = any((row.get("类型") or row.get("type")) in owner_types for row in rows)
+    owner_rows = rows
+    governed = policy_version(sprint_planning_contract(sprint)) == 2
+    if governed:
+        graph, graph_errors = task_dependency_graph(rows)
+        if graph_errors:
+            parser.error("\n".join(graph_errors))
+        ancestors = transitive_task_dependencies(graph, args.from_task_id) | {args.from_task_id}
+        owner_rows = [row for row in rows if row["id"] in ancestors]
+    missing_owner_groups = [
+        sorted(group)
+        for group in owner_groups
+        if not any((row.get("类型") or row.get("type")) in group for row in owner_rows)
+    ]
     requirements_sha256 = (state.get("context") or {}).get("requirements_sha256")
     if responsible_scope == "story" and owner_types and not requirements_sha256:
         parser.error("story 责任域只适用于绑定 USER_STORIES 的需求型 Sprint")
@@ -207,23 +231,44 @@ def main() -> int:
         return 0
     stages = (rules.get("sprint_type_sequences") or {}).get(sprint_type) or []
     try:
-        updated, affected = reopen_scope(
-            sprint.read_text(encoding="utf-8"),
-            stages,
-            args.from_task_id,
-            responsible_scope,
-            owner_types,
-            args.reason,
-        )
+        updated = sprint.read_text(encoding="utf-8")
+        affected_ids = set()
+        for scope, route in routes.items():
+            scope_conflicts = [item for item in conflicts if item.get("responsible_scope") == scope]
+            eligible = {row["id"] for row in owner_rows if (row.get("类型") or row.get("type")) in route["owner_tasks"]}
+            if governed and len(eligible) > 1 and any("responsible_task_ids" not in item for item in scope_conflicts):
+                raise ValueError(
+                    f"{scope} 存在多个责任任务，每条 finding 必须声明 responsible_task_ids；先明确 Review 定位"
+                )
+            declared_owners = [
+                item["responsible_task_ids"] for item in scope_conflicts if "responsible_task_ids" in item
+            ]
+            if any(
+                not isinstance(ids, list) or not ids or any(not isinstance(value, str) for value in ids)
+                for ids in declared_owners
+            ):
+                raise ValueError("responsible_task_ids 必须是非空任务 ID 数组")
+            updated, scope_affected = reopen_scope(
+                updated,
+                stages,
+                args.from_task_id,
+                scope,
+                set(route["owner_tasks"]),
+                args.reason,
+                owner_task_ids={value for ids in declared_owners for value in ids} if declared_owners else None,
+            )
+            affected_ids.update(scope_affected)
+        affected = [row["id"] for row in rows if row["id"] in affected_ids]
     except ValueError as exc:
         parser.error(str(exc))
     sprint.write_text(updated, encoding="utf-8")
     requires_feedback = responsible_scope == "story"
-    requires_structure_amend = not owner_present
+    requires_structure_amend = bool(missing_owner_groups)
     requires_amend = requires_feedback or requires_structure_amend
     receipt = {
         **base_receipt,
         "expected_owner_types": sorted(owner_types),
+        "missing_owner_groups": missing_owner_groups,
         "affected_task_ids": affected,
         "status": (
             "awaiting-requirements-feedback"

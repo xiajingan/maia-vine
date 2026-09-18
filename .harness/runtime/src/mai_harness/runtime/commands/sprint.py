@@ -13,6 +13,7 @@ from mai_harness.runtime.application.integration_contract import (
     validate_integration_contract,
 )
 from mai_harness.runtime.application.requirements import validate_story_confirmations
+from mai_harness.runtime.application.requirements_selection import validate_selection
 from mai_harness.runtime.application.sprint_context import (
     legacy_unversioned_contract,
     linked_worktree,
@@ -24,6 +25,7 @@ from mai_harness.runtime.application.task_evidence import (
     validate_attempt,
 )
 from mai_harness.runtime.application.worktree_service import create_linked_worktree
+from mai_harness.runtime.domain.design_policy import policy_version
 from mai_harness.runtime.domain.modes import PROJECT_TYPES
 from mai_harness.runtime.domain.sprint_context import (
     SPRINT_ID,
@@ -87,6 +89,7 @@ def plan_template(
         f"base_sha: {base_sha}\n"
         f"branch: {branch}\n\n"
         "planning_contract_version: 3\n"
+        "design_governance_version: 2\n"
         f"requirement_mode: {requirement_mode}\n"
         "source_stories: []\n"
         "impact_surfaces: {}\n"
@@ -415,6 +418,8 @@ def main() -> int:
                     if dependency_errors:
                         raise ValueError("Sprint 任务依赖契约无效:\n- " + "\n- ".join(dependency_errors))
                 if contract.get("planning_contract_version") == 3 and contract.get("requirement_mode") == "stories":
+                    if selection_errors := validate_selection(root, plan):
+                        raise ValueError("\n".join(selection_errors))
                     story_confirmations, confirmation_errors = validate_story_confirmations(
                         root, contract.get("source_stories")
                     )
@@ -536,6 +541,8 @@ def main() -> int:
             contract = sprint_planning_contract(plan)
             if contract.get("planning_contract_version") != 3:
                 raise ValueError("新 Sprint 只允许激活 planning contract v3；v1/v2 仅用于已激活历史 Sprint")
+            if policy_version(contract) != 2:
+                raise ValueError("新 Sprint 必须声明 design_governance_version: 2；旧人工门禁仅兼容已激活历史迭代")
             requirements_sha = (
                 source_requirements_digest(root / "USER_STORIES.md", contract.get("source_stories"))
                 if contract.get("requirement_mode") == "stories"
@@ -548,6 +555,7 @@ def main() -> int:
                     "sprint_id": plan.stem,
                     "structure_sha256": digest,
                     "planning_contract_version": 3,
+                    "design_governance_version": policy_version(contract),
                     "task_ids": task_ids,
                     "task_identity": {row["id"]: _task_identity(row) for row in rows},
                     "task_rows": {row["id"]: _task_row_payload(row) for row in rows},
@@ -564,6 +572,8 @@ def main() -> int:
                 raise ValueError("Sprint 尚未 activate")
             contract = sprint_planning_contract(plan)
             active_contract_version = current.get("planning_contract_version")
+            if current.get("design_governance_version", 1) != policy_version(contract):
+                raise ValueError("sprint amend 不得升级或降级设计治理策略；使用显式迁移")
             if not legacy_unversioned_contract(current, contract) and (
                 contract.get("planning_contract_version") != active_contract_version
             ):

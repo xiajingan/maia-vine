@@ -12,6 +12,7 @@ runtime:
     - ASSIGNMENTS.md
     - PRODUCT_SENSE.md
     - DESIGN.md
+    - DESIGN_GOVERNANCE.md
     - UI_DESIGN_SYSTEM.md
     - CODING_BACKEND.md
     - CODING_FRONTEND.md

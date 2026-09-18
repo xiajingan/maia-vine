@@ -10,10 +10,25 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mai_harness.runtime.application.design_publication import (
+    approved_architecture_path,
+    artifact_bundle,
+    publication_errors,
+    registry_revision,
+    require_stable_publications,
+)
+from mai_harness.runtime.application.human_approval import request_approval
 from mai_harness.runtime.application.integration_contract import (
     delivery_identity,
     integration_contract,
     protected_worktree_digest,
+)
+from mai_harness.runtime.domain.design_policy import (
+    ARCHITECTURE_STATUS_LINE,
+    HUMAN_DESIGN_TASKS,
+    TECHNICAL_TASKS,
+    file_digest,
+    policy_version,
 )
 from mai_harness.runtime.domain.document_registry import (
     REGISTRY_TASKS,
@@ -171,6 +186,9 @@ def _matches_controlled_close_archive(
 def _context(
     root: Path, sprint_path: Path, rules_path: Path, task_id: str, task_type: str, task: dict[str, Any]
 ) -> dict[str, Any]:
+    contract = sprint_planning_contract(sprint_path)
+    if policy_version(contract) == 2:
+        require_stable_publications(root)
     facets = task_facets(sprint_path, task_id, task)
     context = {
         "sprint_sha256": _digest_bytes(sprint_path.read_bytes()),
@@ -186,7 +204,6 @@ def _context(
         "task_row_sha256": _task_row_digest(sprint_path, task_id, task_type),
         "upstream_inputs": _upstream_inputs(root, sprint_path, rules_path, task_id, task_type),
     }
-    contract = sprint_planning_contract(sprint_path)
     if sprint_uses_story_requirements(sprint_header(sprint_path).get("sprint_type", ""), contract):
         context["requirements_sha256"] = sprint_source_requirements_digest(
             root / "USER_STORIES.md", sprint_path, contract.get("source_stories")
@@ -195,7 +212,11 @@ def _context(
         architecture = root / "ARCHITECTURE.md"
         if not architecture.is_file():
             raise ValueError(f"{task_type} 任务缺少架构输入: {architecture}")
-        context["architecture_sha256"] = _digest_bytes(architecture.read_bytes())
+        context["architecture_sha256"] = file_digest(architecture)
+    if policy_version(contract) == 2:
+        context["design_governance_version"] = 2
+        if task_type in {"code", "library-code"}:
+            context["architecture_sha256"] = file_digest(root / "ARCHITECTURE.md")
     if task_type in PR_TASK_TYPES:
         context["git_branch"] = _git_branch(root)
     if task.get("execution_contract") == "integration-v1":
@@ -219,12 +240,55 @@ def _task_row_digest(sprint_path: Path, task_id: str, task_type: str) -> str | N
     return _digest_json(matches[0]) if len(matches) == 1 else None
 
 
-def _upstream_context_matches(root: Path, current: Any, expected: dict[str, Any]) -> bool:
+def _blank_recovery_column_matches(sprint_path: Path, current: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Recognize only an absent/empty recovery column, without rewriting old evidence."""
+    rows = [
+        {key: value for key, value in row.items() if key not in {"status", "状态"}}
+        for row in table_rows(sprint_path.read_text(encoding="utf-8"))
+        if row.get("id") == expected.get("task_id")
+        and (row.get("类型") or row.get("type")) == expected.get("task_type")
+    ]
+    if len(rows) != 1 or rows[0].get("recovery_of", "") != "":
+        return False
+    row = rows[0]
+    if expected.get("task_row_sha256") != _digest_json(row):
+        return False
+    without_column = {key: value for key, value in row.items() if key != "recovery_of"}
+    return current.get("task_row_sha256") in {
+        _digest_json(without_column),
+        _digest_json({**without_column, "recovery_of": ""}),
+    }
+
+
+def _upstream_context_matches(
+    root: Path, current: Any, expected: dict[str, Any], *, sprint_path: Path | None = None
+) -> bool:
     """Validate immutable task inputs while allowing normal descendant commits and unrelated plan rows."""
     if not isinstance(current, dict):
         return False
     ignored = {"sprint_sha256", "sprint_structure_sha256", "git_sha"}
-    if any(current.get(field) != expected.get(field) for field in set(expected) - ignored):
+    changed = {field for field in set(expected) - ignored if current.get(field) != expected.get(field)}
+    if (
+        changed == {"architecture_sha256"}
+        and current.get("design_governance_version") == 2
+        and current.get("task_type") in HUMAN_DESIGN_TASKS
+        and sprint_path is not None
+        and approved_architecture_path(
+            root,
+            current["architecture_sha256"],
+            expected["architecture_sha256"],
+            sprint=sprint_path.stem,
+            task_id=current["task_id"],
+        )
+    ):
+        changed.clear()
+    if (
+        changed == {"task_row_sha256"}
+        and sprint_path is not None
+        and _blank_recovery_column_matches(sprint_path, current, expected)
+    ):
+        changed.clear()
+    if changed:
         return False
     recorded_head = str(current.get("git_sha", ""))
     current_head = str(expected.get("git_sha", ""))
@@ -278,7 +342,7 @@ def _current_file_digest(root: Path, relative: Any) -> str:
     path = (root / candidate).resolve()
     if candidate.is_absolute() or ".." in candidate.parts or not path.is_relative_to(root.resolve()):
         return "invalid"
-    return _digest_bytes(path.read_bytes()) if path.is_file() else "missing"
+    return file_digest(path) if path.is_file() else "missing"
 
 
 def _upstream_inputs(
@@ -368,6 +432,13 @@ def _upstream_inputs(
                             if isinstance(item, dict)
                         ),
                         key=lambda item: str(item.get("path", "")),
+                    ),
+                    **(
+                        {"design_publication_valid": not publication_errors(root, state)}
+                        if isinstance(state, dict)
+                        and state.get("context", {}).get("design_governance_version") == 2
+                        and source_type in HUMAN_DESIGN_TASKS
+                        else {}
                     ),
                 },
             }
@@ -531,6 +602,14 @@ def load_current_attempt(
     current = state.get("context")
     pr_identity_mismatch = task_type in PR_TASK_TYPES and not _matches_registered_pr_head(state, expected, task_type)
     comparable_fields = set(expected) - {"sprint_sha256"}
+    if state.get("publication") and state.get("approval"):
+        delta = state["approval"].get("payload", {}).get("architecture_change")
+        if (
+            delta
+            and expected.get("architecture_sha256") == delta["after_sha256"]
+            and not publication_errors(root, state)
+        ):
+            comparable_fields.discard("architecture_sha256")
     close_identity_mismatch = task_type in {"sprint-close", "library-close"} and (
         current != expected
         and not (
@@ -541,6 +620,8 @@ def load_current_attempt(
     ordinary_identity_mismatch = task_type not in PR_TASK_TYPES | {"sprint-close", "library-close"} and (
         not isinstance(current, dict) or any(current.get(field) != expected.get(field) for field in comparable_fields)
     )
+    if task_type in HUMAN_DESIGN_TASKS and expected.get("design_governance_version") == 2:
+        ordinary_identity_mismatch = not _upstream_context_matches(root, current, expected, sprint_path=sprint_path)
     if pr_identity_mismatch or close_identity_mismatch or ordinary_identity_mismatch:
         raise ValueError("任务输入已变化；必须重新运行 preflight gate 创建新轮次")
     return state
@@ -762,7 +843,7 @@ def validate_failed_action_evidence(
     if not isinstance(context, dict):
         return [f"上游失败 Action context 格式非法: {task_id} ({task_type})"]
     expected_context = _context(root, sprint_path, rules_path, task_id, task_type, task)
-    if not _upstream_context_matches(root, context, expected_context):
+    if not _upstream_context_matches(root, context, expected_context, sprint_path=sprint_path):
         return [f"上游失败 Action 证据不存在: {task_id} ({task_type})"]
     raw_phases = state.get("phases")
     phases = raw_phases if isinstance(raw_phases, dict) else {}
@@ -801,6 +882,8 @@ def record_review(
     report_path: Path,
     decision: str,
     artifacts: list[Path],
+    *,
+    architecture_candidate: Path | None = None,
 ) -> Path:
     state = require_ready_attempt(root, sprint_path, rules_path, task_id, task_type, task)
     facets = list((state.get("context") or {}).get("facets") or [])
@@ -825,7 +908,7 @@ def record_review(
         if not artifact.is_file() or not artifact.is_relative_to(root.resolve()):
             raise ValueError(f"Review artifact 必须是工程内文件: {value}")
         artifact_records.append(
-            {"path": artifact.relative_to(root.resolve()).as_posix(), "sha256": _digest_bytes(artifact.read_bytes())}
+            {"path": artifact.relative_to(root.resolve()).as_posix(), "sha256": file_digest(artifact)}
         )
         artifact_paths.append(artifact.relative_to(root.resolve()))
     execute_artifacts = {
@@ -857,6 +940,47 @@ def record_review(
     if decision == "pass" and declared_index and declared_index not in artifact_paths:
         raise ValueError(f"Review 必须绑定任务声明索引: {declared_index}")
     contract = sprint_planning_contract(sprint_path)
+    governed = policy_version(contract) == 2 and task_type in HUMAN_DESIGN_TASKS
+    architecture_change = None
+    if architecture_candidate is not None:
+        candidate = architecture_candidate.resolve()
+        if (
+            not governed
+            or task_type not in TECHNICAL_TASKS
+            or not candidate.is_file()
+            or not candidate.is_relative_to((root / state["run_dir"]).resolve())
+        ):
+            raise ValueError("架构候选只能由新版技术方案绑定当前 attempt 目录中的文件")
+        candidate_header = candidate.read_text(encoding="utf-8").partition("\n# ")[0]
+        if ARCHITECTURE_STATUS_LINE.findall(candidate_header + "\n") != ["pending"]:
+            raise ValueError(
+                "架构候选标题前必须声明 architecture_implementation_status: pending，避免把目标设计当作已实现"
+            )
+        impact = review_document.get("architecture_impact")
+        design_ids = {
+            row["id"]
+            for row in table_rows(sprint_path.read_text(encoding="utf-8"))
+            if (row.get("类型") or row.get("type")) in HUMAN_DESIGN_TASKS and row["id"] != task_id
+        }
+        if (
+            not isinstance(impact, dict)
+            or not isinstance(impact.get("affected_design_task_ids"), list)
+            or not all(isinstance(item, str) and item in design_ids for item in impact["affected_design_task_ids"])
+            or not isinstance(impact.get("rationale"), str)
+            or not impact["rationale"].strip()
+        ):
+            raise ValueError(
+                "架构候选 Review 必须用 architecture_impact 声明受影响的其他设计任务及依据；无影响也须说明"
+            )
+        artifact_paths.append(candidate.relative_to(root.resolve()))
+        architecture_change = {
+            "candidate": candidate.relative_to(root.resolve()).as_posix(),
+            # require_ready_attempt has already verified that this current
+            # architecture is an authorized input for the unchanged attempt.
+            "before_sha256": file_digest(root / "ARCHITECTURE.md"),
+            "after_sha256": file_digest(candidate),
+            "affected_design_task_ids": sorted(set(impact["affected_design_task_ids"])),
+        }
     publish_registry = False
     if decision != "pass" and declared_index and task_type in REGISTRY_TASKS:
         registry_errors = validate_unpublished_task_registry(
@@ -874,6 +998,7 @@ def record_review(
             artifact_paths,
             contract.get("source_stories"),
             contract.get("requirement_mode"),
+            policy=2 if governed else 1,
         )
         if registry_errors:
             raise ValueError("文档作用域索引门禁失败:\n- " + "\n- ".join(registry_errors))
@@ -881,16 +1006,47 @@ def record_review(
     if (
         decision == "pass"
         and task_type == "product"
-        and sprint_uses_story_requirements(sprint_header(sprint_path).get("sprint_type", ""), contract)
+        and (governed or sprint_uses_story_requirements(sprint_header(sprint_path).get("sprint_type", ""), contract))
     ):
         trace_errors = validate_product_trace(
             [root / path for path in artifact_paths],
             contract.get("source_stories"),
             root / "ARCHITECTURE.md",
+            policy=2 if governed else 1,
         )
         if trace_errors:
             raise ValueError("PRD 需求追溯门禁失败:\n- " + "\n- ".join(trace_errors))
     store, name = _state(root, sprint_path, task_id)
+    approval = None
+    revision = None
+    if governed and decision == "pass":
+        revision = registry_revision(root, state)
+        artifact_records = artifact_bundle(
+            root,
+            [path for path in artifact_paths if path != declared_index],
+            ui=task_type == "design",
+            prototype_roots=review_document.get("prototype_roots") if task_type == "design" else None,
+        )
+        approval = request_approval(
+            root,
+            "design",
+            {
+                "sprint": sprint_path.stem,
+                "task_id": task_id,
+                "task_type": task_type,
+                "run_id": state["run_id"],
+                "planning_contract_sha256": planning_contract_digest(sprint_path),
+                "report": report.relative_to(root.resolve()).as_posix(),
+                "report_sha256": file_digest(report),
+                "artifacts": artifact_records,
+                "prototype_roots": review_document.get("prototype_roots", []) if task_type == "design" else [],
+                "registry": revision,
+                "architecture_change": architecture_change,
+                "source_stories": contract.get("source_stories") or [],
+                "requirement_mode": contract.get("requirement_mode"),
+            },
+        )
+        publish_registry = False
 
     def update(current: Any) -> dict[str, Any]:
         if not isinstance(current, dict) or current.get("run_id") != state["run_id"]:
@@ -904,6 +1060,10 @@ def record_review(
             "artifacts": artifact_records,
             "recorded_at": datetime.now(UTC).isoformat(),
         }
+        if governed:
+            current.pop("publication", None)
+            current["approval"] = approval
+            current["human_status"] = "waiting" if approval else "draft"
         return current
 
     if publish_registry:
@@ -975,7 +1135,7 @@ def validate_attempt(
         expected = _context(root, sprint_path, rules_path, task_id, task_type, task)
         if not isinstance(state, dict) or state.get("schema_version") != 3:
             return ["任务执行轮次不存在；先运行 preflight gate"]
-        if not _upstream_context_matches(root, state.get("context"), expected):
+        if not _upstream_context_matches(root, state.get("context"), expected, sprint_path=sprint_path):
             return ["任务相关输入、规划契约或 Git lineage 已变化；必须重新运行该任务"]
     else:
         try:
@@ -1055,10 +1215,12 @@ def validate_attempt(
         review_artifacts = []
     for artifact in review_artifacts:
         path = root / str(artifact.get("path", ""))
-        if not path.is_file() or _digest_bytes(path.read_bytes()) != artifact.get("sha256"):
+        if not path.is_file() or file_digest(path) != artifact.get("sha256"):
             errors.append(f"Review 产物缺失或已变化: {artifact.get('path', '')}")
     if not review_artifacts:
         errors.append("Review 未绑定实际产物")
+    if state.get("context", {}).get("design_governance_version") == 2 and task_type in HUMAN_DESIGN_TASKS:
+        errors.extend(publication_errors(root, state))
     return errors
 
 

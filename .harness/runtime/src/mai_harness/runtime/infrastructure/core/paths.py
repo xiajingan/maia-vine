@@ -47,6 +47,9 @@ class HarnessPaths:
         if installed_runtime:
             project_root = (project or installed_runtime.parent.parent).resolve()
             return cls(project_root, installed_runtime)
+        package = next((parent for parent in location.parents if parent.name == "mai_harness"), None)
+        if package is not None and (package / "assets/config/harness.defaults.yml").is_file():
+            return cls((project or Path.cwd()).resolve(), package / "assets")
         source_root = Path(__file__).resolve().parents[5]
         return cls((project or Path.cwd()).resolve(), source_root)
 

@@ -19,6 +19,9 @@ def main() -> int:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--decision", choices=("pass", "fail", "incomplete"), required=True)
     parser.add_argument("--artifact", type=Path, action="append", default=[])
+    parser.add_argument(
+        "--architecture-candidate", type=Path, help="当前 attempt 内待人工批准的架构候选，禁止直接覆盖 ARCHITECTURE.md"
+    )
     args = parser.parse_args()
     root = Path.cwd().resolve()
     paths = HarnessPaths.detect(project=root)
@@ -37,10 +40,23 @@ def main() -> int:
             args.report,
             args.decision,
             args.artifact,
+            architecture_candidate=args.architecture_candidate,
         )
     except ValueError as exc:
         parser.error(str(exc))
-    print(json.dumps({"ok": True, "evidence": str(evidence), "decision": args.decision}, ensure_ascii=False))
+    state = json.loads(evidence.read_text(encoding="utf-8"))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "evidence": str(evidence),
+                "decision": args.decision,
+                "human_status": state.get("human_status"),
+                "approval": state.get("approval"),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

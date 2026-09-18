@@ -14,6 +14,8 @@ from mai_harness.runtime.application.requirements import (
     validate_partial_sprint_completion,
     validate_story_confirmations,
 )
+from mai_harness.runtime.application.requirements_selection import validate_selection
+from mai_harness.runtime.domain.design_policy import policy_version
 from mai_harness.runtime.domain.sprint_context import (
     SPRINT_ID,
     branch_name,
@@ -260,15 +262,14 @@ def pending_task_reopen_errors(root: Path, sprint_path: Path, state: dict[str, A
         if receipt.get("requires_structure_amend") is True:
             before = receipt.get("sprint_structure_sha256_before")
             expected_owner_types = set(receipt.get("expected_owner_types") or [])
-            owner_added = any(
-                item.get("structure_changed") is True
-                and any(
-                    (rows_by_id.get(str(task_id), {}).get("类型") or rows_by_id.get(str(task_id), {}).get("type"))
-                    in expected_owner_types
-                    for task_id in item.get("added") or []
-                )
+            missing_groups = receipt.get("missing_owner_groups") or [list(expected_owner_types)]
+            added_types = {
+                rows_by_id.get(str(task_id), {}).get("类型") or rows_by_id.get(str(task_id), {}).get("type")
                 for item in amendments
-            )
+                if item.get("structure_changed") is True
+                for task_id in item.get("added") or []
+            }
+            owner_added = all(added_types.intersection(group) for group in missing_groups)
             if (
                 not before
                 or state.get("structure_sha256") in {None, before}
@@ -366,6 +367,8 @@ def validate_sprint_activation(
         return [f"Sprint 合同字段必须且只能声明一次: {ambiguous_fields}"]
     contract = sprint_planning_contract(sprint_path)
     plan_contract_version = contract.get("planning_contract_version")
+    if state.get("design_governance_version", 1) != policy_version(contract):
+        return ["设计治理策略与激活状态不一致；必须显式迁移，不得修改计划绕过人工门禁"]
     if "planning_contract_version" not in state:
         return [
             "旧 Sprint 激活状态缺少 planning contract；必须恢复激活时计划并执行 "
@@ -382,6 +385,8 @@ def validate_sprint_activation(
         )
         if not current or state.get("requirements_sha256") != current:
             return ["Sprint 引用的 USER_STORIES.md 已变化或无效；必须修正规划并执行 harness sprint amend"]
+        if selection_errors := validate_selection(root, sprint_path):
+            return selection_errors
         if sprint_path.parent.name == "completed" and require_completion_receipt:
             completion_errors = validate_partial_sprint_completion(root, sprint_path, contract.get("source_stories"))
             if completion_errors:
