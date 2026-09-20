@@ -95,10 +95,10 @@ assets:
     sha256: 382a4ba4e0a047cc15f49db63a23d31bd7a71f5aa50abb6b2ac5611fea9ac41d
   .harness/docs/CODE_REVIEW.md:
     policy: managed-overwrite
-    sha256: 00ae5e5f51a2bd85de18d0a7a6643ea4a9379287151dae05b24ca007e44db979
+    sha256: 4eeea7feffa9121eae72f95f3377fde2d69740d2aadcdb1c4ac2f8678302e8da
   .harness/docs/CODING_BACKEND.md:
     policy: managed-overwrite
-    sha256: cedee9a84aa56578a656868f97bb895ce8f0173fddb83d797ddf8f36673c9f74
+    sha256: f038971a28b1650c4164b4c7538412a1f3585038b6414175cfe521a4d0af0ded
   .harness/docs/CODING_FRONTEND.md:
     policy: managed-overwrite
     sha256: 17660119c5b369320e0397245ca18c21ff409db4a2add0fedc9228ea9ef0184d
@@ -110,7 +110,7 @@ assets:
     sha256: 6007f3961466b9a26cdec54eaaf23a6d39ea49e2d167b80f3a52db6c830a0d18
   .harness/docs/GOLDEN_RULES.md:
     policy: managed-overwrite
-    sha256: d2edb04108f7f773d3cc8de7db8485143a84e2f3e35fdf627bd27e0b919d7a0c
+    sha256: f7346c0a150a6999421bf09beb92e603c99a73bd3e3718558a068bb3dad88f4e
   .harness/docs/MIGRATION.md:
     policy: managed-overwrite
     sha256: 54f4f989539733d80227533e8443d69d552cb51d7773266ad415bf697ec696b5
@@ -140,7 +140,7 @@ assets:
     sha256: c80f3e7c1859e1fedaaa943a2d9de86435beeff6249b35ee605795020d012a64
   .harness/docs/TECH_BACKEND.md:
     policy: managed-overwrite
-    sha256: 89b0fe513bbe990a62e1bd4d0935a77963e50689a958355baa9608cdb78a1f51
+    sha256: b45bde19bdc3fbff3f156d87fcd74b8184943714ee05edfd58d84811a8f5f416
   .harness/docs/TECH_FRONTEND.md:
     policy: managed-overwrite
     sha256: 0daabf1e43d0cf8f334e469eb67d3d326f4f92915b55b09aba6fee0f34ff02a6
