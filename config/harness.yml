@@ -39,6 +39,7 @@ gates:
   quality_threshold: 95
   require_e2e: true
 deploy:
+  build_image_enabled: false
   test_mode: docker
   prod_mode: docker
 commands:
@@ -53,6 +54,7 @@ commands:
   integration: []
 command_groups:
   precommit:
+  - data_lint
   - doc_lint
 management:
   control_id: maia

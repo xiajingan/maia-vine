@@ -31,6 +31,7 @@ COMMANDS = {
         "check_prototype_coverage",
         "client_package",
         "code_garden",
+        "data_lint",
         "doc_garden",
         "doc_lint",
         "env_check",

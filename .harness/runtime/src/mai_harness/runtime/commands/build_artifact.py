@@ -12,7 +12,7 @@ from pathlib import Path
 
 from mai_harness.runtime.infrastructure.core.command import CommandSpec, execute
 from mai_harness.runtime.infrastructure.deploy_config import load_build_targets_compat
-from mai_harness.runtime.infrastructure.harness_config import load_package_document
+from mai_harness.runtime.infrastructure.harness_config import load_harness_config, load_package_document
 
 
 def image_repo(config: dict) -> str:
@@ -36,7 +36,12 @@ def main() -> int:
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--meta-out", type=Path, default=Path("image-meta.json"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--check-enabled", action="store_true", help="输出自动镜像构建开关，供 CI 决定是否运行")
     args = parser.parse_args()
+    if args.check_enabled:
+        enabled = load_harness_config()["deploy"]["build_image_enabled"]
+        print(f"enabled={str(enabled).lower()}")
+        return 0
     if not args.tag:
         parser.error("--tag 或 IMAGE_TAG 必填")
     config = load_build_targets_compat()

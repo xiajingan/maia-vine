@@ -35,6 +35,8 @@
 
 消费者矩阵、废弃窗口、迁移、SBOM/签名等只在受影响或交付配置要求时展开；未触发的章节不以空表占位。
 
+涉及 Library 自有持久数据迁移时，在“兼容与回退 / 实现与验证”中应用 [数据迁移规范及四类校验](TECH_BACKEND.md#数据迁移)；消费者业务数据迁移仍归消费者迭代技术方案。
+
 ## Review 门禁
 
 - 四个核心章节完整且与 `ARCHITECTURE.md`、`config/harness.yml.dependencies.providers` 一致；条件内容只在触发后检查。

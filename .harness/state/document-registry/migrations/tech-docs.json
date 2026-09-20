@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "tech-docs",
+  "status": "migrated",
+  "before_sha256": "54bf36de4985e22094969775365828dbd77b66479c2a910dae0c28e7add58269",
+  "after_sha256": "31702395db234f8a21a2925ec4346c61ec8d1b7129b2fc9108477e7dcc92df1a",
+  "backup": ".harness/state/document-registry/migrations/tech-docs.before.md",
+  "migration_run_id": "54bf36de4985e22094969775365828db",
+  "mapping": null,
+  "recorded_at": "2026-09-20T15:06:01.131021+00:00"
+}

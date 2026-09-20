@@ -25,10 +25,12 @@ gates:
   quality_threshold: 95
   require_e2e: true
 deploy:
+  build_image_enabled: true
   test_mode: docker
   prod_mode: docker
 
 commands:
+  data_lint: ["{harness}", data-lint]
   dev: []
   lint: ["{python}", -m, ruff, check, --exclude, .harness, .]
   format_check: ["{python}", -m, ruff, format, --check, --exclude, .harness, .]
@@ -44,8 +46,8 @@ commands:
   e2e: [pnpm, test:e2e]
 
 command_groups:
-  static: [format_check, lint, typecheck, architecture, frontend_lint, frontend_typecheck]
-  precommit: [format_check, lint, typecheck, architecture, frontend_lint, frontend_typecheck, unit]
+  static: [data_lint, format_check, lint, typecheck, architecture, frontend_lint, frontend_typecheck]
+  precommit: [data_lint, format_check, lint, typecheck, architecture, frontend_lint, frontend_typecheck, unit]
 
 command_conditions:
   lint: {file_exists: pyproject.toml}

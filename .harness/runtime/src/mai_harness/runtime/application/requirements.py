@@ -320,19 +320,34 @@ def _replace_index(content: str, story: dict[str, Any], status: str) -> str:
     header = next((index for index in range(heading + 1, next_heading) if lines[index].lstrip().startswith("|")), -1)
     if header < 0 or header + 1 >= len(lines):
         raise ValueError("USER_STORIES.md Story 索引缺少表格")
+    headers = [cell.strip() for cell in lines[header].strip().strip("|").split("|")]
+    try:
+        id_index = headers.index("ID")
+        title_index = headers.index("标题")
+        priority_index = headers.index("优先级")
+        status_index = headers.index("状态")
+    except ValueError as exc:
+        raise ValueError("USER_STORIES.md Story 索引缺少 ID/标题/优先级/状态列") from exc
     end = header + 2
     while end < len(lines) and lines[end].lstrip().startswith("|"):
         end += 1
-    row = f"| {story['id']} | {story['title']} | {story['priority']} | `{status}` |"
     replaced = False
     for index in range(header + 2, end):
-        cells = [cell.strip().strip("`") for cell in lines[index].strip().strip("|").split("|")]
-        if cells and cells[0] == story["id"]:
-            lines[index] = row
+        cells = [cell.strip() for cell in lines[index].strip().strip("|").split("|")]
+        if len(cells) == len(headers) and cells[id_index].strip("`") == story["id"]:
+            cells[title_index] = story["title"]
+            cells[priority_index] = story["priority"]
+            cells[status_index] = f"`{status}`"
+            lines[index] = "| " + " | ".join(cells) + " |"
             replaced = True
             break
     if not replaced:
-        lines.insert(end, row)
+        cells = ["" for _ in headers]
+        cells[id_index] = story["id"]
+        cells[title_index] = story["title"]
+        cells[priority_index] = story["priority"]
+        cells[status_index] = f"`{status}`"
+        lines.insert(end, "| " + " | ".join(cells) + " |")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -359,16 +374,25 @@ def _replace_story_statuses(content: str, story_ids: set[str], status: str) -> s
         (index for index in range(heading + 1, len(lines)) if lines[index].startswith("## ")),
         len(lines),
     )
+    header = next((index for index in range(heading + 1, next_heading) if lines[index].lstrip().startswith("|")), -1)
+    if header < 0 or header + 1 >= len(lines):
+        raise ValueError("USER_STORIES.md Story 索引缺少表格")
+    headers = [cell.strip() for cell in lines[header].strip().strip("|").split("|")]
+    try:
+        id_index = headers.index("ID")
+        status_index = headers.index("状态")
+    except ValueError as exc:
+        raise ValueError("USER_STORIES.md Story 索引缺少 ID/状态列") from exc
     changed: set[str] = set()
-    for index in range(heading + 1, next_heading):
+    for index in range(header + 2, next_heading):
         line = lines[index]
         if not line.lstrip().startswith("|"):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) != 4 or cells[0].strip("`") not in story_ids:
+        if len(cells) != len(headers) or cells[id_index].strip("`") not in story_ids:
             continue
-        story_id = cells[0].strip("`")
-        cells[3] = f"`{status}`"
+        story_id = cells[id_index].strip("`")
+        cells[status_index] = f"`{status}`"
         lines[index] = "| " + " | ".join(cells) + " |"
         changed.add(story_id)
     if changed != story_ids:

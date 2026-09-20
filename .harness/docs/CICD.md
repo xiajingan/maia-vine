@@ -71,6 +71,8 @@ Phase 1（Docker Compose + ssh）默认 `HARNESS_DELIVERY_MODE=artifact`：构�
 
 Sprint 生命周期只认 `.harness/rules/task-rules.yml` 中的任务：`build-image`、`promote-test`、`integration`、`prod-deploy`。本地简化命令可以存在，但必须挂到这些任务之一，复用相同输入检查，并写出相同 `.harness/state/*.json` 门控文件；未接入 task-rules 的包装脚本不得写入 Sprint 主流程。`harness promote-prep <env>` 保留为独立诊断命令及旧 Sprint 兼容入口，但新 Sprint 不得规划同名任务；`promote-test` Preflight 会自动执行 Test 环境准备检查。
 
+GitHub `Build Image` 工作流通过 `harness build-artifact --check-enabled` 读取 `config/harness.yml#deploy.build_image_enabled`（默认 true）。无镜像制品或重建期间可设为 false，工作流保留且跳过构建、登录 registry 与发布；恢复时修改项目配置，不修改框架工作流。该开关只控制此自动工作流，不替代 Sprint 构建/发布门禁，也不禁止显式执行构建命令。
+
 `build-image` 在 deploy-sprint(test) 中把 `base_sha` 作为唯一候选，要求全部源 Sprint 审批 commit 都是其祖先且当前 `HEAD` 完全一致，并把完整 commit、signoff 摘要以及每个本地 artifact SHA-256 或 registry digest 写入构建状态。`promote-test` 会再次验证同一身份；其交付事实来自显式绑定 Sprint/task attempt 和同一组制品的 `harness deploy --env test`，部署后生成 run-scoped 不可变回执供 Review Gate 只读校验。`harness promote test` 的历史分支/MR 编排不能替代真实环境部署；L2 integration 只消费当前 run 回执，并再次要求 `HEAD` 与部署 commit 相同，在 deploy 成功后作为独立 `integration` 任务执行，避免误用历史部署状态或把后序测试写成 promote 的循环验收条件。
 
 `harness pipeline` 是平台无关的组合入口：`plan` 解析部署基准线，`run` 调用上述既有任务脚本，`resume/status` 读取 `.harness/pipeline/runs/<run-id>.json`。当前为基础版本：未具备 target digest/artifact SHA、stage input hash 和 previous-stable manifest 证据前，不得替代既有 production 发布门禁。GitLab/GitHub workflow 只能调用该入口或相同底层任务，不另写一套发布语义。

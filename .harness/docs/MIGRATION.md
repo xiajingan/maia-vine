@@ -3,6 +3,8 @@
 > 数据库与配置变更脚本的强制约束。专用于 `migration-design` 任务类型，由 deploy-sprint 的 `release-prep` 任务消费。
 > 流程入口见 `docs/SPRINT.md`，任务规则见 `.harness/rules/task-rules.yml`。
 
+迁移内容及校验设计来自包含迁移的迭代技术方案，必须落实 [TECH_BACKEND 的四类数据迁移校验](TECH_BACKEND.md#数据迁移)。本页约束发布资产与执行协议；脚本检查、正反向演练不能替代目标 DDL、源端模拟数据、结果对账和目标逆向校验，逆向校验也不授权运行失败时自动回退数据。
+
 ---
 
 ## L2 集成中的迁移 producer
@@ -135,4 +137,4 @@ harness migration-progress complete deploy.release-vX.Y.Z
 3. 分别执行 `harness migration-check policy|pair|name|dry-down|idempotency <dir>` 中列出的五个 action。
 4. 提交至 `deploy/release/<vX.Y.Z>/migrations/`。
 
-**验收**：以上 4 项校验子命令退出码全为 0。
+**验收**：上述校验子命令退出码全为 0，并提供技术方案要求的四类迁移校验与恢复验证证据。

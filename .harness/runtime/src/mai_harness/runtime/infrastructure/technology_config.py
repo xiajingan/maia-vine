@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from mai_harness.runtime.domain.data_policy import validate_data_policy
 from mai_harness.runtime.domain.modes import PROJECT_TYPE_COMPONENTS
 from mai_harness.runtime.infrastructure.core.paths import PATHS
 from mai_harness.runtime.infrastructure.harness_config import command_diagnostics, deep_merge
@@ -29,7 +30,7 @@ def _safe_relative(value: Any) -> bool:
 
 
 def validate_technology(config: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
+    errors: list[str] = validate_data_policy(config.get("data_policy"))
     if config.get("version") != 1:
         errors.append("version: 必须为 1")
     components = config.get("components")

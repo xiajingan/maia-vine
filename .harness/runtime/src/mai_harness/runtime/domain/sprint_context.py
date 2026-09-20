@@ -544,11 +544,19 @@ def architecture_domains(path: Path) -> set[str]:
         return set()
     lines = path.read_text(encoding="utf-8").splitlines()
     in_section = False
+    section_level = 0
     for index, line in enumerate(lines):
-        if re.match(r"^##\s+(?:领域(?:划分)?(?:与数据所有权)?|Domain(?:s| Model)?)\s*$", line.strip(), re.I):
+        match = re.match(
+            r"^(#{2,6})\s+(?:\d+(?:\.\d+)*\s+)?(?:核心领域|领域(?:划分)?(?:与数据所有权)?|Domain(?:s| Model)?)\s*$",
+            line.strip(),
+            re.I,
+        )
+        if match:
             in_section = True
+            section_level = len(match.group(1))
             continue
-        if in_section and line.startswith("## "):
+        heading = re.match(r"^(#{2,6})\s+", line)
+        if in_section and heading and len(heading.group(1)) <= section_level:
             break
         if not in_section or not line.lstrip().startswith("|") or index + 1 >= len(lines):
             continue
@@ -1257,7 +1265,12 @@ def validate_sprint_planning_contract(
                 errors.append(f"domain_coverage.{domain} 引用了未知任务: {sorted(unknown_tasks)}")
                 continue
             mapped_types = {_row_value(row_by_id[item], "类型", "type") for item in task_ids}
-            domain_required = {"library-design", "library-code"} if sprint_type == "library-sprint" else {"code"}
+            if sprint_type == "library-sprint":
+                domain_required = {"library-design", "library-code"}
+            elif sprint_type == "control":
+                domain_required = {"assignment-dispatch", "delivery-verify", "test-integration"}
+            else:
+                domain_required = {"code"}
             if sprint_type == "feature-sprint" and not mapped_types & design_types:
                 errors.append(f"domain_coverage.{domain} 缺少领域设计任务")
             if not domain_required <= mapped_types:

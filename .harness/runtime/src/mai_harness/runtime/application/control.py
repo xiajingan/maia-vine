@@ -15,6 +15,7 @@ from mai_harness.runtime.infrastructure.manifest import (
     digest,
     load_manifest,
     now,
+    validate_assignment,
     validate_delivery,
     validate_release,
     write_manifest,
@@ -56,6 +57,8 @@ class ControlAssignmentService:
         self.source_project_id = source_project_id
 
     def dispatch(self, assignment: dict[str, Any], control_root: Path) -> dict[str, Any]:
+        if errors := validate_assignment(assignment):
+            raise ValueError("Assignment 分发校验失败:\n- " + "\n- ".join(errors))
         project_id = assignment.get("target_project_id")
         if project_id not in self.projects:
             raise ValueError(f"Assignment 分发校验失败:\n- target_project_id: 未登记工程 {project_id}")
@@ -70,14 +73,32 @@ class ControlAssignmentService:
         if target_service.inbox != registered_inbox:
             raise ValueError(f"Managed Assignment inbox 与 Control 登记不一致: {project_id}")
         target = registered_inbox / f"{assignment['assignment_id']}.json"
-        receipt = managed_root / ".harness/state/assignments/idempotency" / f"{assignment['idempotency_key']}.json"
-        target_existed = target.exists()
-        receipt_existed = receipt.exists()
-        dispatched = dispatch_assignment(self.source_project_id, managed_root, assignment)
+        managed_receipt = (
+            managed_root / ".harness/state/assignments/idempotency" / f"{assignment['idempotency_key']}.json"
+        )
+        receipt_name = f"idempotency/{assignment['idempotency_key']}.json"
+        state = StateStore(self.root)
+        document = {
+            "assignment_id": assignment["assignment_id"],
+            "target_project_id": project_id,
+            "manifest_digest": digest(assignment),
+            "target": str(target),
+            "managed_receipt": str(managed_receipt),
+        }
+        with state.lock("dispatch"):
+            existing = state.read_json(receipt_name)
+            if existing and existing != document:
+                raise ValueError(f"Control Assignment idempotency_key 冲突: {assignment['idempotency_key']}")
+            target_existed = target.exists()
+            receipt_existed = bool(existing) or managed_receipt.exists()
+            dispatched = dispatch_assignment(self.source_project_id, managed_root, assignment)
+            if not existing:
+                state.write_json(receipt_name, document)
         return {
             "duplicate": receipt_existed,
             "restored": receipt_existed and not target_existed,
-            "receipt": receipt,
+            "receipt": state.path(receipt_name),
+            "managed_receipt": managed_receipt,
             "target": dispatched,
         }
 

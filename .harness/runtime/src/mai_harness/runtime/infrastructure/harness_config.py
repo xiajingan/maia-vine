@@ -44,6 +44,7 @@ SCHEMA = {
     "gates.require_e2e": (bool, None),
     "architecture.profile": (str, {"simple-layered", "domain-centric", "event-driven", "custom"}),
     "deploy.test_mode": (str, {"docker", "cloud-native", "native"}),
+    "deploy.build_image_enabled": (bool, None),
     "deploy.prod_mode": (str, {"docker", "cloud-native", "native"}),
 }
 _cache: dict[str, Any] | None = None
@@ -244,7 +245,9 @@ def validate(config: dict[str, Any]) -> list[str]:
     if bool(evidence_command) != bool(evidence_artifact):
         errors.append("quality.action_evidence: 启用时 command/artifact 必须同时配置")
     execution_policy = action_evidence.get("execution_policy", {})
-    errors.extend(validate_execution_policy(execution_policy, evidence_enabled=bool(evidence_command and evidence_artifact)))
+    errors.extend(
+        validate_execution_policy(execution_policy, evidence_enabled=bool(evidence_command and evidence_artifact))
+    )
     performance = config.get("quality", {}).get("performance_evidence", {})
     if not isinstance(performance, dict):
         errors.append("quality.performance_evidence: 必须是对象")
@@ -522,19 +525,14 @@ def load_harness_config(
             FutureWarning,
             stacklevel=2,
         )
-    if source.exists() and (
-        not isinstance(user.get("architecture"), dict) or "profile" not in user["architecture"]
-    ):
+    if source.exists() and (not isinstance(user.get("architecture"), dict) or "profile" not in user["architecture"]):
         raise ValueError(
             "工程缺少显式 architecture.profile；请先运行 Harness migrate 并确认 ARCHITECTURE.md 当前 Profile"
         )
     if source.exists() and (
-        not isinstance(user.get("observability"), dict)
-        or "required_assets" not in user["observability"]
+        not isinstance(user.get("observability"), dict) or "required_assets" not in user["observability"]
     ):
-        user["observability"] = {
-            "required_assets": ["dashboards", "alerts", "queries", "runbooks"]
-        }
+        user["observability"] = {"required_assets": ["dashboards", "alerts", "queries", "runbooks"]}
         warnings.warn(
             "工程缺少 observability.required_assets，按旧门禁四类资产 fail-closed；"
             "请显式确认适用资产（可确认后声明空数组）",
