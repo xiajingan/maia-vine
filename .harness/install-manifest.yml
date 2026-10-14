@@ -5,10 +5,10 @@ assets:
     sha256: 30a89b4766d59a36b65c09f2df92e13e7f7637bb1b15adfdd07af5207b707c73
   .codex/agents/harness-plan.toml:
     policy: managed-overwrite
-    sha256: 8dec566daf96b42d7e5d38d56252a2477080e322be3de0ed0f3d4343b9d23df0
+    sha256: 6544b0c8bfb956de3055c674c77ed7441ca82f04b5daa877ffb7e982dbeaa766
   .codex/agents/harness-review.toml:
     policy: managed-overwrite
-    sha256: 630be98344fa2b55093cbf61bc38381c5d91ffe729e2529e76c9e89a9f7ee6f2
+    sha256: 38c29459aad0d4d47a30f0a9108ffc8093002321166e3b0c9411cf677a4f5d50
   .codex/config.toml:
     policy: managed-overwrite
     sha256: 3f8f6039ab4f93e29533b7c4b8fe968518019f84febe92ecb02c2d5b3a2c647b
@@ -107,7 +107,7 @@ assets:
     sha256: 92239046887c28e2c122a749a7519530f9f0b081c94b0359cc1e3989962ce921
   .harness/docs/DESIGN_GOVERNANCE.md:
     policy: managed-overwrite
-    sha256: 6007f3961466b9a26cdec54eaaf23a6d39ea49e2d167b80f3a52db6c830a0d18
+    sha256: 3a64fe536e07e7359d95824e9140fb7de933374dc6002f3af5413674161bdc2d
   .harness/docs/GOLDEN_RULES.md:
     policy: managed-overwrite
     sha256: 2fb0b37d3adb21bf1181716500ba01cfe617e8bda0f8dfd2bc9d962203f9d642

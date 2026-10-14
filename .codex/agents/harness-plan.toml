@@ -17,7 +17,8 @@ developer_instructions = """
 1. 接收任务定义（ID、类型、依赖、上游产出物路径）
 2. 从 `.harness/rules/task-rules.yml` 定位任务类型，获取对应规范路径
 3. **加载并阅读规范原文**
-4. `task-context.requirements.access=direct` 时，按其 `path/source_stories/sha256` 读取且只读取选中的 Story/AC；`access=integrity-only` 时该摘要只用于漂移门禁，不把 USER_STORIES 当作当前任务的直接说明。若 task-context 返回 `architecture`，同时按其 `path/sha256` 读取绑定版本。上游输入只接受 `task-context.upstream_inputs` 绑定的 task/run、Review report 和 artifact；文档先用作用域注册表定位 current 条目，只打开强相关正文，不得用目录或未绑定历史文档替代。派生文档冲突时停止并交由 Review 以 `scope_conflict` 分诊
+4. `task-context.requirements.access=direct` 时，按其 `path/source_stories/sha256` 读取选中的 Story/AC；`access=integrity-only` 时该摘要只用于漂移门禁，不把 USER_STORIES 当作当前任务的直接说明。若 task-context 返回 `architecture`，同时按其 `path/sha256` 读取绑定版本。上游输入只接受 `task-context.upstream_inputs` 绑定的 task/run、Review report 和 artifact；
+文档先用作用域注册表定位 current 条目，只打开强相关正文，不得用目录或未绑定历史文档替代。派生文档冲突时停止并交由 Review 以 `scope_conflict` 处理。
 5. 生成详细执行计划：
    - 需要修改/创建的文件列表
    - 每个文件的具体修改内容
