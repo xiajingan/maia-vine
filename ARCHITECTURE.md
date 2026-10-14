@@ -8,7 +8,7 @@
 
 Vine 加载 Stem 签发、Celt 转交的 Todo 人机步骤，呈现表单、预览和确认并通过版本化 Celt Bridge 请求受控能力、回传结果。Workflow/分支/失败/子流程由 Stem 控制，Action/Operation 由 Celt 执行；Vine 不定义业务工作流、不持有 Secret、不决定权限或最终状态。
 
-Vine 不依赖 Python 后端公共库 Seed，也不向 Seed 提交 Dependency Assignment。前端公共能力留在 Vine 自身前端基础层或 Celt Bridge/服务 OpenAPI 契约中，不通过 Python Wheel 或 Seed adapter 间接引入。
+Vine 不依赖 Seed 的服务端公共包。前端公共能力留在 Vine 自身前端基础层或 Celt Bridge/服务 OpenAPI 契约中，不通过 Seed 的服务端 adapter 间接引入。
 
 ## 2. 结构与契约
 
@@ -45,10 +45,6 @@ Vine 操作前必须建立短期 InteractionSession：当前操作者经 OIDC/de
 - 安全：CSP/Trusted Types/SRI、无 Secret、InteractionSession、敏感字段不进 telemetry/localStorage。
 - 可维护：Step renderer 无服务 API，只调用 typed Bridge；状态机集中在 runtime。
 
-产品路线：V0 Bridge shell → V1 通用表单/确认 → V2 Reply renderer → V3 Broadcast/Group renderer → V4 可访问性/多语言/弱网 → V5 经审查的 renderer SDK。
-
 ## 3. 发布与验证
 
 Vine 的唯一发布模型是不可变静态制品封装 OCI 镜像，经 Helm/Ingress 发布；Celt 在受控 WebView 加载 manifest 固定的 HTTPS URL/digest，不捆绑第二份 Vine。Release Manifest 联合固定 Vine/Celt/Bridge/Stem 协议版本；CSP、来源 allowlist、依赖锁和资源完整性启用。Test 在真实 Celt Bridge 覆盖握手/伪造来源、签名失败、未知方法、重连、版本/租约撤销、取消竞态、乱序/重复回执、跨身份草稿、脱敏和无障碍。
-
-`maia-vine-v0.1.0` 切换签名 HumanStepDescriptor、InteractionSession、typed Bridge 和有序回执，并迁移已登记 renderer；Test 联合 Celt/Stem 验证后，`maia-vine-v0.2.0` 删除旧 H5 流程、未签名上下文、动态脚本/HTML loader 和旧 Bridge 方法，不保留运行时兼容分支。
