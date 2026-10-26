@@ -1,6 +1,5 @@
 # 项目编码规则
 
-> ⚠️ **MAI-Harness 框架文件** — 请勿在项目中修改。如需变更请在框架工程中修改并覆盖到此项目。
 
 > 项目级的编码规则与约定。Agent 在编码和评审任务中加载本文件。
 > 分层架构规则见 [ARCHITECTURE.md](ARCHITECTURE.md)。
@@ -56,7 +55,7 @@
 
 > Agent 提交代码前必须逐项确认。
 
-- [ ] `config/harness.yml` 对当前 stack 声明的 lint/typecheck/build 命令通过
+- [ ] `package.json`/CI 对当前 stack 声明的 lint/typecheck/build 命令通过
 - [ ] `command_groups.static` 全部通过（默认 Ruff/AST lint + ESLint/tsc）
 - [ ] `commands.unit` 全部通过（Python 默认 pytest）
 - [ ] 新增代码有对应测试

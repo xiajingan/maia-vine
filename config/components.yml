@@ -1,7 +1,0 @@
-version: 1
-components:
-  harness-runtime:
-    type: python-package
-    source: .
-    artifacts: []
-    contracts: []
