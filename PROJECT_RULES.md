@@ -3,7 +3,7 @@
 
 > 项目级的编码规则与约定。Agent 在编码和评审任务中加载本文件。
 > 分层架构规则见 [ARCHITECTURE.md](ARCHITECTURE.md)。
-> 框架级编码规范见 `docs/CODING_BACKEND.md` / `docs/CODING_FRONTEND.md`。
+> 通用编码品味由 mai-skills 的 `backend-taste` / `frontend-taste` 承载，本文只记录项目特有约定。
 
 ## 命名约定
 
@@ -81,14 +81,7 @@
 
 <!-- TODO: 根据项目实际情况调整 -->
 
-## 黄金原则（Golden Rules）
-
-> 跨项目通用工程原则，详见 [docs/GOLDEN_RULES.md](docs/GOLDEN_RULES.md)（symlink 自动同步）。
-> G-1（共享工具库）、G-2（禁止 YOLO 探测）、G-3（不变式集中管理）。
-
 ## 共享工具库
-
-> 黄金原则 G-1：优先使用共享工具库，禁止手写重复 helper。
 
 | 工具 | 路径 | 说明 |
 |------|------|------|
@@ -99,6 +92,4 @@
 - ❌ 禁止绕过项目选定前端框架直接操作 DOM
 - ❌ 禁止使用 `eval`、`Function()` 等动态执行
 - ❌ 禁止在循环中进行数据库/API 调用（使用批量操作）
-- ❌ 禁止 YOLO 式探测数据——见 GOLDEN_RULES.md §G-2
 - ❌ 禁止跨层直接引用（见 ARCHITECTURE.md 依赖方向规则）
-- ❌ 禁止魔法数字/硬编码业务常量——见 GOLDEN_RULES.md §G-3
