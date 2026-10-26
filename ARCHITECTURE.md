@@ -18,7 +18,7 @@ Vine 不依赖 Seed 的服务端公共包。前端公共能力留在 Vine 自身
 
 Bridge 启动挑战生成页面实例 nonce，并绑定 Celt 进程、来源窗口、Todo/Execution attempt 和单调双向 sequence；请求/响应均有关联 ID 与 MAC/签名，重放、错误来源和 allowlist 外方法默认拒绝。Celt 重新验证租约/fencing 和能力，页面 allowlist 不是最终授权。
 
-Vine 操作前必须建立短期 InteractionSession：当前操作者经 OIDC/device authorization 登录后，由平台在确认当前 User 对执行 Account 有 Use 后签名绑定根 Workspace/User/account/terminal/Todo/attempt（权限语义见 [Maia §2.1](../USER_STORIES.md#21-权限模型)）；页面只显示完成当前步骤所需的最小上下文，任务或托管发出的消息只显示来源类型，不授予对 Task 或内容的权限；Celt 同时核对当前业务账号。共享 CVD 的身份/账号不匹配、会话过期或页面遗留时清空内容并重新认证，回执携带实际交互 User。
+Vine 操作前必须建立短期 InteractionSession：当前操作者经 OIDC/device authorization 登录后，由平台在确认当前 User 对执行 Account 有 Use 后签名绑定根 Workspace/User/account/terminal/Todo/attempt（权限语义见 [Maia §2.1](../docs/product/constraints/permission-model.md#21-权限模型)）；页面只显示完成当前步骤所需的最小上下文，任务或托管发出的消息只显示来源类型，不授予对 Task 或内容的权限；Celt 同时核对当前业务账号。共享 CVD 的身份/账号不匹配、会话过期或页面遗留时清空内容并重新认证，回执携带实际交互 User。
 
 每个回执严格按 Celt Bridge Schema 包含 Task/Todo/Execution/attempt、Action/Workflow 版本、step ID、attempt 内 sequence、幂等键、起止时间、输入摘要、结构化 output、error envelope 和 evidence refs。Vine 只报告用户交互结果；Celt/Stem 转换为权威 Step/Execution 状态。
 
