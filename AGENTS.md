@@ -15,9 +15,8 @@ Celt 受控 WebView 中的 H5 人机步骤载体；按实际获准场景采用�
 - [PROJECT_RULES.md](PROJECT_RULES.md)：本工程适用约束与检查。
 - [工程职责与业务入口](../docs/product/vine/overview.md)：先看职责和业务切片，再到[主故事索引](../docs/product/index.md)及[故事地图](../docs/product/story-map.md)选取范围。
 - `docs/tech/`：当前模块设计；`docs/test-cases/`：本工程测试用例；`docs/prototypes/`：UI 原型。
-- 流程状态与过程记录统一在总仓 `docs/iterations/`，不复制到本工程模块设计。
 
 ## 智能体约定
 
 - 与用户沟通、状态反馈及报告统一使用中文，技术术语和代码标识符除外。
-- 工作区检查与保护遵守总仓约定；本工程阶段及当前流程从总仓读取，不另维护迭代状态。
+- 工作区检查与保护遵守总仓约定；当前状态以总仓为准；普通文档维护和业务流程的记录边界遵守公共规则。
