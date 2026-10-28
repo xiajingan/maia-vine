@@ -12,9 +12,11 @@ Vine 不编排 Workflow、不持有 Secret、不裁决业务权限或最终状�
 
 ## 2. 本地结构与契约适配
 
-`transport → runtime → features/renderers → components`；telemetry 只产生允许的脱敏行为和性能/错误。transport 固定消费 Celt 发布的 Bridge Schema/生成类型，不手写第二套 wire DTO；runtime 消费受控上下文和租约/版本事件；renderer 不直调服务 API，只用 typed Bridge。
+本地按 `transport → runtime → features/renderers → components` 分层。telemetry 只记录获准且已脱敏的行为、性能和错误数据。
 
-本地 HumanStepDescriptor 关联 `step_code`、renderer version、输入输出 Schema、字段与脱敏规则、只读影响摘要、风险提示及所需局部 command。只加载制品 manifest 登记且兼容的 renderer，未知类型失败关闭；不以远端动态 HTML/脚本扩展。descriptor 的网络字段来自 Celt 契约，不能由 Vine 声明业务能力或权限。
+transport 使用固定版本的 Celt Bridge Schema 和生成类型，不手写第二套 wire DTO；runtime 处理受控上下文及租约、版本事件；renderer 只通过 typed Bridge 交互，不直接调用服务 API。
+
+本地 HumanStepDescriptor 关联 `step_code`、renderer version、输入输出 Schema、字段与脱敏规则、只读影响摘要、风险提示及所需局部 command。只加载制品 manifest 登记且兼容的 renderer，遇到未知类型时拒绝加载；不以远端动态 HTML/脚本扩展。descriptor 的网络字段来自 Celt 契约，不能由 Vine 声明业务能力或权限。
 
 来源窗口、页面实例、nonce、序号和关联由 transport 按[受控上下文与 Bridge](../docs/architecture/terminal-interaction.md#2-bridge-与受控上下文)验证；错误来源、重放、未知版本/方法及超时不给业务结果。实际交互人和账号须有效，若场景需要 InteractionSession，它只承接短期技术上下文；认证入口在实际采用时设计，不预设必须新增 OIDC/device authorization 登录流程。
 
@@ -34,7 +36,7 @@ Vine 不编排 Workflow、不持有 Secret、不裁决业务权限或最终状�
 
 ### 2.2 输入、恢复与质量
 
-本地流程为 `加载受控上下文 → 核验当前交互身份/账号 → Bridge 握手 → 选择已登记 renderer → 校验输入 → 按声明局部应答 → 关联交互回执`；任何身份、版本、租约或 sequence 无效均失败关闭，不能推进步骤。
+本地流程为 `加载受控上下文 → 核验当前交互身份/账号 → Bridge 握手 → 选择已登记 renderer → 校验输入 → 按声明局部应答 → 关联交互回执`；身份、版本、租约或 sequence 任一无效时，均拒绝继续交互，不能推进步骤。
 
 可编辑输入按根/User/账号/Todo/attempt/Schema/制品摘要隔离；允许持久化的输入受加密、大小和 TTL 约束。待回传事实由 Celt 独立持久化，输入清理不能删除已发生事实。恢复、清除和最小显示规则引用[数据保护](../docs/product/constraints/data-protection.md)及终端契约，不将输入草稿等同任务草稿，也不默认所有输入都可恢复。
 
