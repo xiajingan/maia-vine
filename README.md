@@ -1,6 +1,6 @@
 # maia-vine
 
-Celt 受控 WebView 中的 H5 人机步骤载体；按实际获准场景采用。
+Celt WebView 与渠道应用侧边栏的 H5 载体；宿主能力及 CUA 锚点分别验证。
 
 技术栈：TypeScript / Vue 3 / Vite；Node.js 用于构建工具链；具体版本见[技术栈基线](../docs/architecture/technology-stack.md)。
 
